@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="description" content="Lab 03 Tele-Communication System — visual data transfer via screen and camera using Hamming error correction.">
+  <title>Lab03 · TeleCom System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+
+  <!-- OpenCV.js (WASM build — ~8 MB, cached after first load) -->
+  <script>
+    window._cvReady = false;
+    function _onOpenCvLoad() {
+      // cv may already be initialised synchronously or need the callback
+      if (typeof cv !== 'undefined' && cv.Mat !== undefined) {
+        window._cvReady = true;
+        document.dispatchEvent(new Event('opencv-ready'));
+      } else if (typeof cv !== 'undefined') {
+        cv['onRuntimeInitialized'] = function () {
+          window._cvReady = true;
+          document.dispatchEvent(new Event('opencv-ready'));
+        };
+      }
+    }
+  </script>
+  <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="_onOpenCvLoad()"></script>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SCREEN 1 — Role Selection + Permissions
+════════════════════════════════════════════════════════════════════════════ -->
+<div id="screen-role" class="screen active">
+  <div class="role-page">
+
+    <div class="hero">
+      <div class="hero-icon">📡</div>
+      <h1 class="hero-title">TeleCom<span class="accent">Lab</span></h1>
+      <p class="hero-subtitle">Lab 03 · Visual Communication System</p>
+      <p class="hero-desc">
+        Colour-grid screen → camera · Hamming(30,25) ECC · Acoustic ACK/NACK
+      </p>
+    </div>
+
+    <!-- ── System readiness strip ───────────────────────────────────────── -->
+    <div class="sys-strip" id="sys-strip">
+
+      <!-- OpenCV status -->
+      <div class="sys-item" id="sys-cv">
+        <span class="sys-dot loading" id="cv-dot"></span>
+        <span class="sys-label">OpenCV</span>
+        <span class="sys-state" id="cv-state">loading…</span>
+      </div>
+
+      <!-- Permissions -->
+      <div class="sys-item" id="sys-camera">
+        <span class="sys-dot" id="cam-dot"></span>
+        <span class="sys-label">Camera</span>
+        <span class="sys-state" id="cam-state">–</span>
+      </div>
+      <div class="sys-item" id="sys-mic">
+        <span class="sys-dot" id="mic-dot"></span>
+        <span class="sys-label">Microphone</span>
+        <span class="sys-state" id="mic-state">–</span>
+      </div>
+    </div>
+
+    <!-- Grant permissions button (shown until both are granted) -->
+    <div id="perm-gate">
+      <button class="btn btn-primary btn-perm" id="btn-grant-perms">
+        🔑 Grant Camera &amp; Microphone Access
+      </button>
+      <p class="perm-hint" id="perm-hint">Required before choosing a role</p>
+    </div>
+
+    <!-- Role cards (dimmed until ready) -->
+    <div class="role-cards" id="role-cards" aria-disabled="true">
+      <button class="role-card" id="btn-role-sender" disabled>
+        <span class="rc-icon">📺</span>
+        <span class="rc-label">Sender</span>
+        <span class="rc-desc">Display &amp; encode messages</span>
+      </button>
+      <button class="role-card" id="btn-role-receiver" disabled>
+        <span class="rc-icon">🎥</span>
+        <span class="rc-label">Receiver</span>
+        <span class="rc-desc">Capture &amp; decode messages</span>
+      </button>
+      <button class="role-card" id="btn-role-debug">
+        <span class="rc-icon">🛠️</span>
+        <span class="rc-label">Debug Lab</span>
+        <span class="rc-desc">Test tones &amp; RX pipeline</span>
+      </button>
+    </div>
+
+    <div class="team-strip">
+      <span>Ansh Agrawal · 24B0909</span>
+      <span class="sep">|</span>
+      <span>Bibaswan Biswas · 24B0915</span>
+      <span class="sep">|</span>
+      <span>Prasoon Badjatya · 24B0916</span>
+      <span class="sep">|</span>
+      <span>Saksham Khandelwal · 24B0965</span>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SCREEN 2 — Sender
+════════════════════════════════════════════════════════════════════════════ -->
+<div id="screen-sender" class="screen">
+
+  <!-- Canvas area -->
+  <div id="tx-canvas-wrapper">
+    <canvas id="tx-canvas"></canvas>
+    <button id="btn-fullscreen" class="fs-btn" title="Toggle fullscreen">⛶</button>
+  </div>
+
+  <!-- Control panel -->
+  <div id="sender-panel">
+    <div class="panel-header">
+      <button class="back-btn" id="sender-back">← Back</button>
+      <h2 class="panel-title">Sender</h2>
+      <span id="sender-status-badge" class="status-badge idle">IDLE</span>
+    </div>
+
+    <div class="fields">
+      <div class="field-group">
+        <label class="field-label" for="msg-bits">Message bits <span class="field-hint">(max 20, only 0s and 1s)</span></label>
+        <input type="text" id="msg-bits" class="field-input mono"
+               placeholder="e.g. 0100011" maxlength="20" autocomplete="off"
+               inputmode="text">
+      </div>
+
+      <div class="field-row">
+        <div class="field-group half">
+          <label class="field-label" for="error-bit">Error bit index <span class="field-hint">(0-indexed, optional)</span></label>
+          <input type="number" id="error-bit" class="field-input" placeholder="none" min="0" max="19">
+        </div>
+        <div class="field-group half">
+          <label class="field-label" for="dwell-time">Dwell: <span id="dwell-val" class="accent">300</span> ms</label>
+          <input type="range" id="dwell-time" class="slider" min="100" max="1000" value="300" step="50">
+        </div>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button id="btn-show-calib" class="btn btn-primary" disabled>
+        📺 Show Calibration Frame
+      </button>
+      <button id="btn-reset-sender" class="btn btn-ghost">↺ Reset</button>
+    </div>
+
+    <div id="sender-log" class="log-box" role="log" aria-live="polite"></div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SCREEN 3 — Receiver
+════════════════════════════════════════════════════════════════════════════ -->
+<div id="screen-receiver" class="screen">
+
+  <div class="rx-layout">
+
+    <!-- Header -->
+    <div class="panel-header">
+      <button class="back-btn" id="receiver-back">← Back</button>
+      <h2 class="panel-title">Receiver</h2>
+      <span id="receiver-status-badge" class="status-badge idle">IDLE</span>
+    </div>
+
+    <!-- Camera + debug -->
+    <div class="rx-top">
+      <div class="cam-wrapper">
+        <video id="rx-video" playsinline muted autoplay></video>
+        <!-- Green quad overlay drawn by main.js -->
+        <canvas id="rx-overlay" class="cam-overlay"></canvas>
+        <div id="camera-hint" class="cam-hint">Camera not started</div>
+      </div>
+
+      <div class="debug-grid">
+        <div class="dbg-row"><span class="dbg-k">Markers</span><span id="dbg-markers" class="dbg-v">—</span></div>
+        <div class="dbg-row"><span class="dbg-k">Clock</span><span id="dbg-clock" class="dbg-v mono">—</span></div>
+        <div class="dbg-row"><span class="dbg-k">Cells</span><span id="dbg-cells" class="dbg-v mono">—</span></div>
+        <div class="dbg-row"><span class="dbg-k">Symbols</span><span id="dbg-symbols" class="dbg-v">—</span></div>
+        <div class="dbg-row full"><span class="dbg-k">Bit buf</span><span id="dbg-bits" class="dbg-v mono small">—</span></div>
+      </div>
+    </div>
+
+    <!-- Result -->
+    <div id="rx-result-area" class="result-card hidden" role="region" aria-label="Decoded message">
+      <div class="result-header">Decoded Message</div>
+      <div id="rx-message" class="result-msg mono"></div>
+      <div id="rx-err-info" class="rx-err-info ok"></div>
+      <div id="rx-meta"    class="result-meta"></div>
+    </div>
+
+    <!-- Actions -->
+    <div class="btn-row">
+      <button id="btn-start-camera" class="btn btn-primary">📷 Start Camera</button>
+      <button id="btn-calibrate"    class="btn btn-secondary" disabled>🎯 Calibrate</button>
+      <button id="btn-reset-receiver" class="btn btn-ghost">↺ Reset</button>
+    </div>
+
+    <div id="receiver-log" class="log-box" role="log" aria-live="polite"></div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SCREEN 4 — Debug Lab
+════════════════════════════════════════════════════════════════════════════ -->
+<div id="screen-debug" class="screen">
+  <div class="rx-layout">
+    <div class="panel-header">
+      <button class="back-btn" id="debug-back">← Back</button>
+      <h2 class="panel-title">Debug &amp; Diagnostics Lab</h2>
+      <span class="status-badge active">TESTING</span>
+    </div>
+
+    <div class="fields" style="padding: 1rem;">
+      <div class="field-group">
+        <label class="field-label">Acoustic Tone Generator Test</label>
+        <div class="btn-row" style="padding: 0;">
+          <button id="btn-dbg-ready" class="btn btn-primary">🔊 Play READY (700Hz)</button>
+          <button id="btn-dbg-ack" class="btn btn-secondary">🔊 Play ACK (1600Hz)</button>
+          <button id="btn-dbg-nack" class="btn btn-ghost" style="color: var(--warn); border-color: var(--warn);">🔊 Play NACK (2500Hz)</button>
+        </div>
+      </div>
+
+      <div class="field-group" style="margin-top: 1rem;">
+        <label class="field-label">Tone Detector (Mic Listener)</label>
+        <div class="btn-row" style="padding: 0;">
+          <button id="btn-dbg-listen-start" class="btn btn-primary">🎤 Start Mic Detector</button>
+          <button id="btn-dbg-listen-stop" class="btn btn-ghost" disabled>⏹ Stop Mic Detector</button>
+        </div>
+        <div id="dbg-detected-tone" class="result-meta" style="font-size: 0.9rem; margin-top: 0.5rem;">Detected Tone: <span class="mono accent" id="dbg-tone-name">None</span></div>
+      </div>
+    </div>
+
+    <div id="debug-log" class="log-box" style="flex:1; max-height: unset;" role="log" aria-live="polite"></div>
+  </div>
+</div>
+
+<!-- ── Scripts (order matters: layout → hamming → framing → audio → phy → main) ── -->
+<script src="js/layout.js"></script>
+<script src="js/hamming.js"></script>
+<script src="js/framing.js"></script>
+<script src="js/audio_tx.js"></script>
+<script src="js/audio_rx.js"></script>
+<script src="js/physical_tx.js"></script>
+<script src="js/physical_rx.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
