@@ -11,7 +11,7 @@
 //   bandHz      = 40    (±40 Hz detection window per frequency)
 //   threshold   = -45 dBFS absolute
 //   snrDb       = 12 dB above noise floor per frequency
-//   cooldown    = 1200 ms (chords ring longer)
+//   cooldown    = 600 ms
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
     // Must match AudioTX.TONE_SPECS
@@ -30,7 +30,7 @@
             this.running   = false;
             this.threshold = -45;   // dBFS
             this.snrDb     = 12;    // dB above noise floor
-            this.cooldown  = 1200;  // ms
+            this.cooldown  = 600;   // ms
             this._lastFire = 0;
             this._timer    = null;
             /** @type {((name: string) => void)|null} */
@@ -42,8 +42,24 @@
 
         async start() {
             try {
-                this._stream   = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                let stream = null;
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            echoCancellation: false,
+                            noiseSuppression: false,
+                            autoGainControl: false,
+                        },
+                        video: false,
+                    });
+                } catch (_) {
+                    stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                }
+                this._stream   = stream;
                 this._ctx      = new (window.AudioContext || window.webkitAudioContext)();
+                if (this._ctx.state === 'suspended') {
+                    try { await this._ctx.resume(); } catch (_) {}
+                }
                 const src      = this._ctx.createMediaStreamSource(this._stream);
                 this._analyser = this._ctx.createAnalyser();
                 this._analyser.fftSize = 8192;
@@ -66,7 +82,7 @@
         }
 
         _poll() {
-            if (!this._analyser) return;
+            if (!this._analyser || !this._ctx) return;
             const binCount = this._analyser.frequencyBinCount;
             const buf      = new Float32Array(binCount);
             this._analyser.getFloatFrequencyData(buf);
@@ -76,7 +92,7 @@
             const hzPerBin = sr / fftSz;
             const bandBins = Math.ceil(BAND_HZ / hzPerBin);
 
-            // Noise floor: median-ish via mean (good enough for speech-free environment)
+            // Noise floor: average over spectrum
             let noiseSum = 0;
             for (let i = 0; i < binCount; i++) noiseSum += buf[i];
             const noiseFloor = noiseSum / binCount;

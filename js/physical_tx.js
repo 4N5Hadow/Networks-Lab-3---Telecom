@@ -45,8 +45,8 @@
             const ctx = this.ctx;
             const { S, pad, act, mS, ckS, cS } = this._dim();
 
-            // ── Background: pure white for max contrast ──────────────────────
-            ctx.fillStyle = '#FFFFFF';
+            // ── Background: medium grey — contrasts with both black markers and white cells
+            ctx.fillStyle = '#C0C0C0';
             ctx.fillRect(0, 0, S, S);
 
             // ── Finder markers (solid black) ─────────────────────────────────
@@ -98,6 +98,16 @@
         drawCalibration() {
             this.clockState = false;
             this._draw([0, 1, 2, 3]);
+        }
+
+        /**
+         * Show a single symbol: toggle clock, draw the 4-cell data.
+         * Used by main.js for stop-and-wait per-symbol transmission.
+         * @param {number[]} cells – [TL, TR, BL, BR] color indices
+         */
+        showSymbol(cells) {
+            this.clockState = !this.clockState;
+            this._draw(cells);
         }
 
         startTransmission(symbols, dwellMs, onDone) {

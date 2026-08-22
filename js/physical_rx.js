@@ -2,17 +2,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // PHYSICAL RX  —  OpenCV.js camera receiver (robust version)
 //
-// Key improvements over v1:
-//   1. Marker detection uses approxPolyDP to find 4-vertex convex contours
-//      (actual squares), not just "any blob with decent fill ratio"
-//   2. Area filtering uses percentage of total image area, adapting to
-//      different camera distances automatically
-//   3. Corner sorting uses sum/difference method (robust to rotation)
-//   4. warpPerspective destination maps to MARKER CENTROIDS, matching
-//      the canonical coordinate system in layout.js
-//   5. Calibration requires markers to be found (rejects garbage frames)
-//   6. Clock debounce K increased to 4 for more stability
-//   7. Exposes getWarpedCanvas() for debug visualisation
+// Key features:
+//   1. Marker detection: approxPolyDP + bounding-box fill/aspect ratio
+//      (fill >= 0.55 accounts for 45° rotated square where fill is 0.50)
+//   2. Area filtering uses fraction of image area for scale invariance
+//   3. Canonical warp maps marker centroids to corners of 400×400 canvas
+//   4. Sampling patches (hw=30) compute mean RGB inside enlarged data cells
+//   5. Debounce K=4 prevents clock flicker
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
     const LO = window.LAYOUT;
@@ -54,6 +50,7 @@
 
             // Last good warp for debug
             this._lastWarpOk = false;
+            this._lastCandidateCount = 0;
 
             // Callbacks
             this.onNewSymbol = null;
@@ -247,25 +244,23 @@
                     const area = cv.contourArea(cnt);
 
                     if (area >= minArea && area <= maxArea) {
-                        // Approximate contour to polygon
                         const peri   = cv.arcLength(cnt, true);
                         const approx = new cv.Mat();
                         cv.approxPolyDP(cnt, approx, 0.04 * peri, true);
 
-                        // Must have ~4 vertices (square) and be convex
-                        if (approx.rows >= 4 && approx.rows <= 6 && cv.isContourConvex(approx)) {
-                            const rect = cv.boundingRect(cnt);
-                            const bboxArea = rect.width * rect.height;
-                            const fill = area / (bboxArea || 1);
-                            const asp  = Math.min(rect.width, rect.height) / (Math.max(rect.width, rect.height) || 1);
+                        const rect = cv.boundingRect(cnt);
+                        const bboxArea = rect.width * rect.height;
+                        const fill = area / (bboxArea || 1);
+                        const asp  = Math.min(rect.width, rect.height) / (Math.max(rect.width, rect.height) || 1);
 
-                            // Square-ish: fill > 0.7 (actual squares fill well), aspect > 0.5
-                            if (fill >= 0.65 && asp >= 0.5) {
-                                const M  = cv.moments(cnt, false);
-                                const cx = M.m10 / (M.m00 || 1);
-                                const cy = M.m01 / (M.m00 || 1);
-                                candidates.push({ x: cx, y: cy, area });
-                            }
+                        // Quad-like blob with good rectangular fill (fill >= 0.55 allows 45-deg rotation)
+                        const isQuadLike = approx.rows >= 4 && approx.rows <= 8;
+
+                        if (isQuadLike && fill >= 0.55 && asp >= 0.45) {
+                            const M  = cv.moments(cnt, false);
+                            const cx = M.m10 / (M.m00 || 1);
+                            const cy = M.m01 / (M.m00 || 1);
+                            candidates.push({ x: cx, y: cy, area });
                         }
                         approx.delete();
                     }
@@ -279,9 +274,9 @@
                 candidates.sort((a, b) => b.area - a.area);
                 const top4 = candidates.slice(0, 4);
 
-                // Reject if sizes differ too much (max 8× ratio for perspective)
+                // Reject if sizes differ too much (max 10× ratio for perspective)
                 const maxA = top4[0].area, minA2 = top4[3].area;
-                if (minA2 * 8 < maxA) return null;
+                if (minA2 * 10 < maxA) return null;
 
                 return this._sortCorners(top4);
 
@@ -400,6 +395,7 @@
         }
 
         _classify(rgb) {
+            if (!this.refColors || this.refColors.length < 4) return 0;
             let minD = Infinity, minI = 0;
             this.refColors.forEach((ref, i) => {
                 const d = (rgb.r - ref.r) ** 2 + (rgb.g - ref.g) ** 2 + (rgb.b - ref.b) ** 2;
@@ -411,6 +407,14 @@
         resetClock() {
             this.lastClockState = 'B';
             this._debounce      = [];
+        }
+
+        reset() {
+            this._calibrating  = false;
+            this._calibSamples = [];
+            this._calibDone    = null;
+            this.calibrated    = false;
+            this.resetClock();
         }
     }
 

@@ -2,7 +2,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // AUDIO TX  —  Web Audio API tone generation
 //
-// Tones are now multi-tone chords for maximum distinguishability:
+// Tones are multi-tone chords for maximum distinguishability:
 //   READY:  440 + 554 Hz (A4 + C#5 major third), 800 ms — warm "ding-dong"
 //   ACK:   1760 + 2217 Hz (A6 + C#7), 350 ms — bright short chirp
 //   NACK:   220 + 277 Hz  (A3 + C#4), 1000 ms — low rumble
@@ -23,18 +23,20 @@
         if (!_ctx || _ctx.state === 'closed') {
             _ctx = new (window.AudioContext || window.webkitAudioContext)();
         }
-        if (_ctx.state === 'suspended') _ctx.resume();
         return _ctx;
     }
 
     /** Play a chord tone.  @returns {Promise<void>} */
-    function playTone(type) {
-        return new Promise(resolve => {
-            const spec = TONE_SPECS[type];
-            if (!spec) { resolve(); return; }
-            const ctx = _getCtx();
-            const t0  = ctx.currentTime;
+    async function playTone(type) {
+        const spec = TONE_SPECS[type];
+        if (!spec) return;
+        const ctx = _getCtx();
+        if (ctx.state === 'suspended') {
+            try { await ctx.resume(); } catch (_) {}
+        }
 
+        return new Promise(resolve => {
+            const t0 = ctx.currentTime;
             let ended = 0;
             for (const hz of spec.freqs) {
                 const osc  = ctx.createOscillator();
@@ -47,7 +49,10 @@
                 gain.connect(ctx.destination);
                 osc.start(t0);
                 osc.stop(t0 + spec.dur + 0.05);
-                osc.onended = () => { ended++; if (ended >= spec.freqs.length) resolve(); };
+                osc.onended = () => {
+                    ended++;
+                    if (ended >= spec.freqs.length) resolve();
+                };
             }
         });
     }
