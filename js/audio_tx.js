@@ -2,25 +2,22 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // AUDIO TX  —  Web Audio API tone generation
 //
-// Frequencies are non-harmonic so that playing one tone cannot produce
-// a partial/harmonic that falls in another tone's detection band:
-//   READY:  700 Hz, 600 ms  — mid pitch, comfortable "ding"
-//   ACK:   1600 Hz, 400 ms  — high pitch, short "success" blip
-//   NACK:  2500 Hz, 850 ms  — very high, longer "error" buzz
+// Tones are now multi-tone chords for maximum distinguishability:
+//   READY:  440 + 554 Hz (A4 + C#5 major third), 800 ms — warm "ding-dong"
+//   ACK:   1760 + 2217 Hz (A6 + C#7), 350 ms — bright short chirp
+//   NACK:   220 + 277 Hz  (A3 + C#4), 1000 ms — low rumble
 //
-// Non-harmonic check (no octave/fifth relationships):
-//   700 harmonics  → 1400, 2100, 2800, ...  (none land on 1600 or 2500) ✓
-//   1600 harmonics → 3200, 4800, ...         (none land on 700 or 2500) ✓
-//   2500 harmonics → 5000, ...               (none land on 700 or 1600) ✓
+// Each tone plays two simultaneous sinusoids so they sound like chords,
+// making them trivially distinguishable by ear. The detector looks for
+// BOTH frequencies co-present to virtually eliminate false positives.
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
     const TONE_SPECS = Object.freeze({
-        READY: { hz:  700, dur: 0.60 },
-        ACK:   { hz: 1600, dur: 0.40 },
-        NACK:  { hz: 2500, dur: 0.85 },
+        READY: { freqs: [440, 554],   dur: 0.80 },
+        ACK:   { freqs: [1760, 2217], dur: 0.35 },
+        NACK:  { freqs: [220, 277],   dur: 1.00 },
     });
-    const FADE = 0.04;   // s — exponential tail to prevent clicks
-    let _ctx   = null;
+    let _ctx = null;
 
     function _getCtx() {
         if (!_ctx || _ctx.state === 'closed') {
@@ -30,10 +27,7 @@
         return _ctx;
     }
 
-    /** Play a tone and resolve when the oscillator stops.
-     *  @param {'READY'|'ACK'|'NACK'} type
-     *  @returns {Promise<void>}
-     */
+    /** Play a chord tone.  @returns {Promise<void>} */
     function playTone(type) {
         return new Promise(resolve => {
             const spec = TONE_SPECS[type];
@@ -41,26 +35,22 @@
             const ctx = _getCtx();
             const t0  = ctx.currentTime;
 
-            const osc  = ctx.createOscillator();
-            const gain = ctx.createGain();
-
-            osc.type = 'sine';
-            osc.frequency.value = spec.hz;
-            gain.gain.setValueAtTime(0.80, t0);
-            gain.gain.exponentialRampToValueAtTime(0.001, t0 + spec.dur);
-
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start(t0);
-            osc.stop(t0 + spec.dur + FADE);
-            osc.onended = resolve;
+            let ended = 0;
+            for (const hz of spec.freqs) {
+                const osc  = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = hz;
+                gain.gain.setValueAtTime(0.55, t0);
+                gain.gain.exponentialRampToValueAtTime(0.001, t0 + spec.dur);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(t0);
+                osc.stop(t0 + spec.dur + 0.05);
+                osc.onended = () => { ended++; if (ended >= spec.freqs.length) resolve(); };
+            }
         });
     }
 
-    // FREQS as { READY: hz, ACK: hz, NACK: hz } — consumed by AudioRX and debug page
-    const FREQS = Object.freeze(
-        Object.fromEntries(Object.entries(TONE_SPECS).map(([k, v]) => [k, v.hz]))
-    );
-
-    window.AudioTX = { playTone, FREQS, TONE_SPECS };
+    window.AudioTX = { playTone, TONE_SPECS };
 })();

@@ -4,16 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <meta name="description" content="Lab 03 Tele-Communication System — visual data transfer via screen and camera using Hamming error correction.">
-  <title>Lab03 · TeleCom System</title>
+  <title>Lab03 — TeleCom System</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 
-  <!-- OpenCV.js (WASM build — ~8 MB, cached after first load) -->
   <script>
     window._cvReady = false;
     function _onOpenCvLoad() {
-      // cv may already be initialised synchronously or need the callback
       if (typeof cv !== 'undefined' && cv.Mat !== undefined) {
         window._cvReady = true;
         document.dispatchEvent(new Event('opencv-ready'));
@@ -30,80 +28,63 @@
 <body>
 
 <!-- ═══════════════════════════════════════════════════════════════════════════
-     SCREEN 1 — Role Selection + Permissions
+     SCREEN 1 — Home
 ════════════════════════════════════════════════════════════════════════════ -->
 <div id="screen-role" class="screen active">
   <div class="role-page">
 
     <div class="hero">
-      <div class="hero-icon">📡</div>
       <h1 class="hero-title">TeleCom<span class="accent">Lab</span></h1>
-      <p class="hero-subtitle">Lab 03 · Visual Communication System</p>
-      <p class="hero-desc">
-        Colour-grid screen → camera · Hamming(30,25) ECC · Acoustic ACK/NACK
-      </p>
+      <p class="hero-subtitle">Lab 03 — Visual Communication System</p>
     </div>
 
-    <!-- ── System readiness strip ───────────────────────────────────────── -->
     <div class="sys-strip" id="sys-strip">
-
-      <!-- OpenCV status -->
       <div class="sys-item" id="sys-cv">
         <span class="sys-dot loading" id="cv-dot"></span>
         <span class="sys-label">OpenCV</span>
-        <span class="sys-state" id="cv-state">loading…</span>
+        <span class="sys-state" id="cv-state">loading</span>
       </div>
-
-      <!-- Permissions -->
       <div class="sys-item" id="sys-camera">
         <span class="sys-dot" id="cam-dot"></span>
         <span class="sys-label">Camera</span>
-        <span class="sys-state" id="cam-state">–</span>
+        <span class="sys-state" id="cam-state">—</span>
       </div>
       <div class="sys-item" id="sys-mic">
         <span class="sys-dot" id="mic-dot"></span>
         <span class="sys-label">Microphone</span>
-        <span class="sys-state" id="mic-state">–</span>
+        <span class="sys-state" id="mic-state">—</span>
       </div>
     </div>
 
-    <!-- Grant permissions button (shown until both are granted) -->
     <div id="perm-gate">
       <button class="btn btn-primary btn-perm" id="btn-grant-perms">
-        🔑 Grant Camera &amp; Microphone Access
+        Grant Camera &amp; Microphone Access
       </button>
-      <p class="perm-hint" id="perm-hint">Required before choosing a role</p>
+      <p class="perm-hint" id="perm-hint">Required before selecting a role</p>
     </div>
 
-    <!-- Role cards (dimmed until ready) -->
-    <div class="role-cards" id="role-cards" aria-disabled="true">
+    <div class="role-cards" id="role-cards">
       <button class="role-card" id="btn-role-sender" disabled>
-        <span class="rc-icon">📺</span>
         <span class="rc-label">Sender</span>
-        <span class="rc-desc">Display &amp; encode messages</span>
+        <span class="rc-desc">Encode and display bit sequences</span>
       </button>
       <button class="role-card" id="btn-role-receiver" disabled>
-        <span class="rc-icon">🎥</span>
         <span class="rc-label">Receiver</span>
-        <span class="rc-desc">Capture &amp; decode messages</span>
-      </button>
-      <button class="role-card" id="btn-role-debug">
-        <span class="rc-icon">🛠️</span>
-        <span class="rc-label">Debug Lab</span>
-        <span class="rc-desc">Test tones &amp; RX pipeline</span>
+        <span class="rc-desc">Capture and decode transmissions</span>
       </button>
     </div>
 
     <div class="team-strip">
-      <span>Ansh Agrawal · 24B0909</span>
-      <span class="sep">|</span>
-      <span>Bibaswan Biswas · 24B0915</span>
-      <span class="sep">|</span>
-      <span>Prasoon Badjatya · 24B0916</span>
-      <span class="sep">|</span>
-      <span>Saksham Khandelwal · 24B0965</span>
+      <span>Ansh Agrawal — 24B0909</span>
+      <span class="sep">·</span>
+      <span>Bibaswan Biswas — 24B0915</span>
+      <span class="sep">·</span>
+      <span>Prasoon Badjatya — 24B0916</span>
+      <span class="sep">·</span>
+      <span>Saksham Khandelwal — 24B0965</span>
     </div>
 
+    <button class="debug-link" id="btn-role-debug">Open Diagnostics Console</button>
   </div>
 </div>
 
@@ -111,14 +92,11 @@
      SCREEN 2 — Sender
 ════════════════════════════════════════════════════════════════════════════ -->
 <div id="screen-sender" class="screen">
-
-  <!-- Canvas area -->
   <div id="tx-canvas-wrapper">
     <canvas id="tx-canvas"></canvas>
     <button id="btn-fullscreen" class="fs-btn" title="Toggle fullscreen">⛶</button>
   </div>
 
-  <!-- Control panel -->
   <div id="sender-panel">
     <div class="panel-header">
       <button class="back-btn" id="sender-back">← Back</button>
@@ -128,7 +106,7 @@
 
     <div class="fields">
       <div class="field-group">
-        <label class="field-label" for="msg-bits">Message bits <span class="field-hint">(max 20, only 0s and 1s)</span></label>
+        <label class="field-label" for="msg-bits">Message bits <span class="field-hint">(max 20, 0s and 1s only)</span></label>
         <input type="text" id="msg-bits" class="field-input mono"
                placeholder="e.g. 0100011" maxlength="20" autocomplete="off"
                inputmode="text">
@@ -147,36 +125,29 @@
     </div>
 
     <div class="btn-row">
-      <button id="btn-show-calib" class="btn btn-primary" disabled>
-        📺 Show Calibration Frame
-      </button>
-      <button id="btn-reset-sender" class="btn btn-ghost">↺ Reset</button>
+      <button id="btn-show-calib" class="btn btn-primary" disabled>Show Calibration Frame</button>
+      <button id="btn-reset-sender" class="btn btn-ghost">Reset</button>
     </div>
 
     <div id="sender-log" class="log-box" role="log" aria-live="polite"></div>
   </div>
-
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════════════════════
      SCREEN 3 — Receiver
 ════════════════════════════════════════════════════════════════════════════ -->
 <div id="screen-receiver" class="screen">
-
   <div class="rx-layout">
 
-    <!-- Header -->
     <div class="panel-header">
       <button class="back-btn" id="receiver-back">← Back</button>
       <h2 class="panel-title">Receiver</h2>
       <span id="receiver-status-badge" class="status-badge idle">IDLE</span>
     </div>
 
-    <!-- Camera + debug -->
     <div class="rx-top">
       <div class="cam-wrapper">
         <video id="rx-video" playsinline muted autoplay></video>
-        <!-- Green quad overlay drawn by main.js -->
         <canvas id="rx-overlay" class="cam-overlay"></canvas>
         <div id="camera-hint" class="cam-hint">Camera not started</div>
       </div>
@@ -185,67 +156,94 @@
         <div class="dbg-row"><span class="dbg-k">Markers</span><span id="dbg-markers" class="dbg-v">—</span></div>
         <div class="dbg-row"><span class="dbg-k">Clock</span><span id="dbg-clock" class="dbg-v mono">—</span></div>
         <div class="dbg-row"><span class="dbg-k">Cells</span><span id="dbg-cells" class="dbg-v mono">—</span></div>
+        <div class="dbg-row"><span class="dbg-k">RGB</span><span id="dbg-rgb" class="dbg-v mono small">—</span></div>
         <div class="dbg-row"><span class="dbg-k">Symbols</span><span id="dbg-symbols" class="dbg-v">—</span></div>
         <div class="dbg-row full"><span class="dbg-k">Bit buf</span><span id="dbg-bits" class="dbg-v mono small">—</span></div>
       </div>
     </div>
 
-    <!-- Result -->
     <div id="rx-result-area" class="result-card hidden" role="region" aria-label="Decoded message">
       <div class="result-header">Decoded Message</div>
       <div id="rx-message" class="result-msg mono"></div>
       <div id="rx-err-info" class="rx-err-info ok"></div>
-      <div id="rx-meta"    class="result-meta"></div>
+      <div id="rx-meta" class="result-meta"></div>
     </div>
 
-    <!-- Actions -->
     <div class="btn-row">
-      <button id="btn-start-camera" class="btn btn-primary">📷 Start Camera</button>
-      <button id="btn-calibrate"    class="btn btn-secondary" disabled>🎯 Calibrate</button>
-      <button id="btn-reset-receiver" class="btn btn-ghost">↺ Reset</button>
+      <button id="btn-start-camera" class="btn btn-primary">Start Camera</button>
+      <button id="btn-calibrate" class="btn btn-secondary" disabled>Calibrate</button>
+      <button id="btn-reset-receiver" class="btn btn-ghost">Reset</button>
     </div>
 
     <div id="receiver-log" class="log-box" role="log" aria-live="polite"></div>
-
   </div>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════════════════════
-     SCREEN 4 — Debug Lab
+     SCREEN 4 — Debug Console
 ════════════════════════════════════════════════════════════════════════════ -->
 <div id="screen-debug" class="screen">
-  <div class="rx-layout">
-    <div class="panel-header">
+  <div class="debug-console">
+    <div class="panel-header debug-header">
       <button class="back-btn" id="debug-back">← Back</button>
-      <h2 class="panel-title">Debug &amp; Diagnostics Lab</h2>
-      <span class="status-badge active">TESTING</span>
+      <h2 class="panel-title">Diagnostics Console</h2>
     </div>
 
-    <div class="fields" style="padding: 1rem;">
-      <div class="field-group">
-        <label class="field-label">Acoustic Tone Generator Test</label>
-        <div class="btn-row" style="padding: 0;">
-          <button id="btn-dbg-ready" class="btn btn-primary">🔊 Play READY (700Hz)</button>
-          <button id="btn-dbg-ack" class="btn btn-secondary">🔊 Play ACK (1600Hz)</button>
-          <button id="btn-dbg-nack" class="btn btn-ghost" style="color: var(--warn); border-color: var(--warn);">🔊 Play NACK (2500Hz)</button>
+    <div class="debug-sections">
+      <!-- Audio section -->
+      <section class="dbg-section">
+        <h3 class="dbg-section-title">Acoustic Tones</h3>
+        <div class="dbg-row-inline">
+          <button id="btn-dbg-ready" class="dbg-btn ready">READY — 440+554 Hz</button>
+          <button id="btn-dbg-ack" class="dbg-btn ack">ACK — 1760+2217 Hz</button>
+          <button id="btn-dbg-nack" class="dbg-btn nack">NACK — 220+277 Hz</button>
         </div>
-      </div>
+      </section>
 
-      <div class="field-group" style="margin-top: 1rem;">
-        <label class="field-label">Tone Detector (Mic Listener)</label>
-        <div class="btn-row" style="padding: 0;">
-          <button id="btn-dbg-listen-start" class="btn btn-primary">🎤 Start Mic Detector</button>
-          <button id="btn-dbg-listen-stop" class="btn btn-ghost" disabled>⏹ Stop Mic Detector</button>
+      <section class="dbg-section">
+        <h3 class="dbg-section-title">Tone Detector</h3>
+        <div class="dbg-row-inline">
+          <button id="btn-dbg-listen-start" class="dbg-btn listen">Start Mic Listener</button>
+          <button id="btn-dbg-listen-stop" class="dbg-btn stop" disabled>Stop</button>
         </div>
-        <div id="dbg-detected-tone" class="result-meta" style="font-size: 0.9rem; margin-top: 0.5rem;">Detected Tone: <span class="mono accent" id="dbg-tone-name">None</span></div>
-      </div>
+        <div class="dbg-tone-display">
+          <span class="dbg-tone-label">Last detected:</span>
+          <span class="mono accent" id="dbg-tone-name">—</span>
+        </div>
+        <div id="dbg-fft-info" class="dbg-fft-box mono small">FFT levels will appear here when listening</div>
+      </section>
+
+      <!-- Vision section -->
+      <section class="dbg-section">
+        <h3 class="dbg-section-title">Vision Pipeline</h3>
+        <div class="dbg-row-inline">
+          <button id="btn-dbg-cam-start" class="dbg-btn listen">Start Camera Feed</button>
+          <button id="btn-dbg-cam-stop" class="dbg-btn stop" disabled>Stop</button>
+        </div>
+        <div class="dbg-vision-grid">
+          <div class="dbg-vision-cell">
+            <span class="dbg-vision-label">Camera Feed</span>
+            <video id="dbg-video" playsinline muted autoplay class="dbg-video"></video>
+          </div>
+          <div class="dbg-vision-cell">
+            <span class="dbg-vision-label">Warped View (400×400)</span>
+            <canvas id="dbg-warp-canvas" width="200" height="200" class="dbg-warp"></canvas>
+          </div>
+        </div>
+        <div class="dbg-vision-stats">
+          <div class="dbg-stat"><span class="dbg-stat-k">Markers found</span><span id="dbg-v-markers" class="dbg-stat-v">—</span></div>
+          <div class="dbg-stat"><span class="dbg-stat-k">Candidates</span><span id="dbg-v-candidates" class="dbg-stat-v">—</span></div>
+          <div class="dbg-stat"><span class="dbg-stat-k">Clock luma</span><span id="dbg-v-clock" class="dbg-stat-v mono">—</span></div>
+          <div class="dbg-stat"><span class="dbg-stat-k">Cell colours</span><span id="dbg-v-cells" class="dbg-stat-v mono">—</span></div>
+          <div class="dbg-stat"><span class="dbg-stat-k">Cell RGB</span><span id="dbg-v-rgb" class="dbg-stat-v mono small">—</span></div>
+        </div>
+      </section>
     </div>
 
-    <div id="debug-log" class="log-box" style="flex:1; max-height: unset;" role="log" aria-live="polite"></div>
+    <div id="debug-log" class="log-box debug-log" role="log" aria-live="polite"></div>
   </div>
 </div>
 
-<!-- ── Scripts (order matters: layout → hamming → framing → audio → phy → main) ── -->
 <script src="js/layout.js"></script>
 <script src="js/hamming.js"></script>
 <script src="js/framing.js"></script>

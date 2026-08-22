@@ -1,58 +1,50 @@
 'use strict';
 // ─────────────────────────────────────────────────────────────────────────────
-// PHYSICAL RX  —  OpenCV.js-based camera receiver
+// PHYSICAL RX  —  OpenCV.js camera receiver (robust version)
 //
-// Pipeline per animation-frame:
-//   1. Capture video frame → canvas → cv.Mat (RGBA)
-//   2. Grayscale → Gaussian blur → Otsu threshold (BINARY_INV)
-//      → Morphological close → findContours
-//      → Filter for square blobs → pick top-4 by area → sort into TL/TR/BL/BR
-//   3. getPerspectiveTransform (marker centroids → 400×400 canonical square)
-//      + warpPerspective  →  clean canonical view
-//   4. In canonical view: mean-RGB sample at LAYOUT.CANON_CLOCK and CANON_CELLS
-//   5. Clock K-frame debounce → onNewSymbol([TL,TR,BL,BR]) callback
-//
-// Calibration: sender shows the fixed colour-grid frame; receiver samples
-// 30 warped frames to compute per-colour reference centroids + clock threshold.
-//
-// All tunable parameters are exposed as instance properties.
-// Requires: window.cv (OpenCV.js loaded), window.LAYOUT (layout.js), window.Framing.
+// Key improvements over v1:
+//   1. Marker detection uses approxPolyDP to find 4-vertex convex contours
+//      (actual squares), not just "any blob with decent fill ratio"
+//   2. Area filtering uses percentage of total image area, adapting to
+//      different camera distances automatically
+//   3. Corner sorting uses sum/difference method (robust to rotation)
+//   4. warpPerspective destination maps to MARKER CENTROIDS, matching
+//      the canonical coordinate system in layout.js
+//   5. Calibration requires markers to be found (rejects garbage frames)
+//   6. Clock debounce K increased to 4 for more stability
+//   7. Exposes getWarpedCanvas() for debug visualisation
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
     const LO = window.LAYOUT;
-    const CS = LO.CANON_SIZE;  // 400 px
+    const CS = LO.CANON_SIZE;  // 400
 
-    // ─────────────────────────────────────────────────────────────────────────
     class PhysicalRX {
-        /** @param {HTMLVideoElement} video */
         constructor(video) {
             this.video   = video;
             this.running = false;
 
-            // ── Calibration state ──────────────────────────────────────────
+            // Calibration
             this.calibrated   = false;
-            this.refColors    = null;    // [{r,g,b} × 4] — WHITE, RED, GREEN, BLUE
+            this.refColors    = null;
             this.clockMidLuma = 128;
 
-            // ── Clock debounce ────────────────────────────────────────────
-            this.lastClockState = null;   // 'B' | 'W'
+            // Clock debounce
+            this.lastClockState = 'B';
             this._debounce      = [];
-            this.K              = 3;      // frames of agreement required
+            this.K              = 4;
 
-            // ── Marker detection tuning ───────────────────────────────────
-            this.markerMinArea  = 20;     // px² in downsampled space (DS_W × DS_H)
-            this.markerMaxArea  = 12000;  // px²
-            this.markerFillMin  = 0.40;   // contour_area / bbox_area
-            this.markerAspMin   = 0.25;   // w/h or h/w must exceed this
-            this.DS_W           = 480;    // width for downsampled detection pass
+            // Marker detection params (adaptive: fraction of image area)
+            this.markerMinFrac = 0.001;   // marker must be > 0.1% of image
+            this.markerMaxFrac = 0.08;    // marker must be < 8% of image
+            this.DS_W          = 640;     // downsample width for detection
 
-            // ── Internal canvases (not attached to DOM) ───────────────────
-            this._capCanvas  = document.createElement('canvas');   // capture at DS_W
+            // Internal canvases
+            this._capCanvas  = document.createElement('canvas');
             this._capCtx     = this._capCanvas.getContext('2d', { willReadFrequently: true });
             this._warpCanvas = Object.assign(document.createElement('canvas'), { width: CS, height: CS });
             this._warpCtx    = this._warpCanvas.getContext('2d', { willReadFrequently: true });
 
-            // ── Calibration accumulation ──────────────────────────────────
+            // Calibration accumulation
             this._calibrating  = false;
             this._calibSamples = [];
             this._calibDone    = null;
@@ -60,16 +52,15 @@
             this._stream = null;
             this._raf    = null;
 
-            // ── Public callbacks ──────────────────────────────────────────
-            /** @type {((cells: number[]) => void)|null} */
+            // Last good warp for debug
+            this._lastWarpOk = false;
+
+            // Callbacks
             this.onNewSymbol = null;
-            /** @type {((info: object) => void)|null}
-             *  info includes: { screenFound, quad?, clockState?, luma?, midLuma?,
-             *                   cellColors?, newSymbol?, calibrating? } */
             this.onDebug     = null;
         }
 
-        // ── Camera lifecycle ─────────────────────────────────────────────────
+        // ── Camera ───────────────────────────────────────────────────────────
 
         async start() {
             try {
@@ -100,6 +91,11 @@
             if (this._stream) this._stream.getTracks().forEach(t => t.stop());
         }
 
+        /** Get the internal warped canvas (400×400) for debug display. */
+        getWarpedCanvas() {
+            return this._lastWarpOk ? this._warpCanvas : null;
+        }
+
         // ── Frame loop ───────────────────────────────────────────────────────
 
         _loop() {
@@ -118,21 +114,25 @@
             const VW = this.video.videoWidth, VH = this.video.videoHeight;
             if (!VW || !VH) return;
 
-            // ── Downsample for detection ──────────────────────────────────────
+            // Downsample for detection
             const dsH = Math.round(this.DS_W * VH / VW);
             this._capCanvas.width  = this.DS_W;
             this._capCanvas.height = dsH;
             this._capCtx.drawImage(this.video, 0, 0, this.DS_W, dsH);
 
-            // ── Detect 4 finder markers via OpenCV ────────────────────────────
+            // Detect 4 finder markers
             const quad = this._findMarkers(this.DS_W, dsH);
 
             if (!quad) {
-                if (this.onDebug) this.onDebug({ screenFound: false, cvReady: true });
+                this._lastWarpOk = false;
+                if (this.onDebug) this.onDebug({
+                    screenFound: false, cvReady: true,
+                    candidateCount: this._lastCandidateCount || 0,
+                });
                 return;
             }
 
-            // Scale quad from downsampled space → native video space
+            // Scale to native video space
             const sx = VW / this.DS_W, sy = VH / dsH;
             const fullQuad = {
                 TL: { x: quad.TL.x * sx, y: quad.TL.y * sy },
@@ -141,28 +141,37 @@
                 BR: { x: quad.BR.x * sx, y: quad.BR.y * sy },
             };
 
-            // ── Capture full-res frame for warp ──────────────────────────────
+            // Full-res capture for warp
             this._capCanvas.width  = VW;
             this._capCanvas.height = VH;
             this._capCtx.drawImage(this.video, 0, 0, VW, VH);
 
-            // ── Perspective warp → CS×CS canonical view ───────────────────────
-            if (!this._warpPerspective(fullQuad, VW, VH)) return;
+            // Warp
+            if (!this._warpPerspective(fullQuad, VW, VH)) {
+                this._lastWarpOk = false;
+                return;
+            }
+            this._lastWarpOk = true;
 
             const warpedData = this._warpCtx.getImageData(0, 0, CS, CS);
 
-            // ── Calibration ───────────────────────────────────────────────────
+            // Calibration
             if (this._calibrating) {
                 this._accumCalib(warpedData);
-                if (this.onDebug) this.onDebug({ screenFound: true, quad: fullQuad, calibrating: true, cvReady: true });
+                if (this.onDebug) this.onDebug({
+                    screenFound: true, quad: fullQuad, calibrating: true, cvReady: true,
+                    calibProgress: this._calibSamples.length,
+                });
                 return;
             }
             if (!this.calibrated) {
-                if (this.onDebug) this.onDebug({ screenFound: true, quad: fullQuad, calibrating: false, cvReady: true });
+                if (this.onDebug) this.onDebug({
+                    screenFound: true, quad: fullQuad, calibrating: false, cvReady: true,
+                });
                 return;
             }
 
-            // ── Sample clock cell ─────────────────────────────────────────────
+            // Sample clock
             const ck    = LO.CANON_CLOCK;
             const ckRgb = this._mean(warpedData.data, CS, CS, ck.x, ck.y, ck.hw);
             const luma  = 0.299 * ckRgb.r + 0.587 * ckRgb.g + 0.114 * ckRgb.b;
@@ -179,11 +188,10 @@
                 newSymbol = true;
             }
 
-            // ── Sample data cells ─────────────────────────────────────────────
-            const cellColors = LO.CANON_CELLS.map(c => {
-                const rgb = this._mean(warpedData.data, CS, CS, c.x, c.y, c.hw);
-                return this._classify(rgb);
-            });
+            // Sample data cells
+            const rawCellRgb = LO.CANON_CELLS.map(c =>
+                this._mean(warpedData.data, CS, CS, c.x, c.y, c.hw));
+            const cellColors = rawCellRgb.map(rgb => this._classify(rgb));
 
             if (this.onDebug) {
                 this.onDebug({
@@ -193,6 +201,7 @@
                     luma: luma.toFixed(1),
                     midLuma: this.clockMidLuma.toFixed(1),
                     cellColors: cellColors.map(c => Framing.COLOR_NAMES[c]),
+                    cellRgb: rawCellRgb.map(c => `(${c.r.toFixed(0)},${c.g.toFixed(0)},${c.b.toFixed(0)})`),
                     newSymbol,
                     cvReady: true,
                 });
@@ -201,73 +210,78 @@
             if (newSymbol && this.onNewSymbol) this.onNewSymbol([...cellColors]);
         }
 
-        // ── OpenCV marker detection ──────────────────────────────────────────
+        // ── Marker detection ─────────────────────────────────────────────────
 
-        /** Find 4 finder-marker centroids in the current downsampled canvas.
-         *  Returns { TL, TR, BL, BR } or null. */
         _findMarkers(W, H) {
             let src = null, gray = null, blur = null, binary = null, closed = null;
             let contours = null, hierarchy = null, kernel = null;
+            this._lastCandidateCount = 0;
+
             try {
                 const imgData = this._capCtx.getImageData(0, 0, W, H);
-                src    = cv.matFromImageData(imgData);
-                gray   = new cv.Mat();
+                src = cv.matFromImageData(imgData);
+                gray = new cv.Mat();
                 cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
 
-                // Gaussian blur — reduces noise/compression artefacts
-                blur   = new cv.Mat();
+                blur = new cv.Mat();
                 cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
 
-                // Otsu threshold + BINARY_INV → dark pixels become white blobs
                 binary = new cv.Mat();
                 cv.threshold(blur, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
 
-                // Morphological close to fill small holes inside markers
-                kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+                kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(7, 7));
                 closed = new cv.Mat();
                 cv.morphologyEx(binary, closed, cv.MORPH_CLOSE, kernel);
 
-                // Find external contours
                 contours  = new cv.MatVector();
                 hierarchy = new cv.Mat();
                 cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-                // ── Filter for square-ish blobs ────────────────────────────
+                const imgArea = W * H;
+                const minArea = imgArea * this.markerMinFrac;
+                const maxArea = imgArea * this.markerMaxFrac;
                 const candidates = [];
 
                 for (let i = 0; i < contours.size(); i++) {
                     const cnt  = contours.get(i);
                     const area = cv.contourArea(cnt);
 
-                    if (area >= this.markerMinArea && area <= this.markerMaxArea) {
-                        const rect = cv.boundingRect(cnt);
-                        const bboxArea = rect.width * rect.height;
-                        const fill     = area / (bboxArea || 1);
-                        const asp      = rect.width / (rect.height || 1);
-                        const aspInv   = rect.height / (rect.width || 1);
+                    if (area >= minArea && area <= maxArea) {
+                        // Approximate contour to polygon
+                        const peri   = cv.arcLength(cnt, true);
+                        const approx = new cv.Mat();
+                        cv.approxPolyDP(cnt, approx, 0.04 * peri, true);
 
-                        if (fill >= this.markerFillMin &&
-                            asp >= this.markerAspMin && aspInv >= this.markerAspMin) {
-                            // Compute centroid via moments
-                            const M   = cv.moments(cnt, false);
-                            const cx  = M.m10 / (M.m00 || 1);
-                            const cy  = M.m01 / (M.m00 || 1);
-                            candidates.push({ x: cx, y: cy, area });
+                        // Must have ~4 vertices (square) and be convex
+                        if (approx.rows >= 4 && approx.rows <= 6 && cv.isContourConvex(approx)) {
+                            const rect = cv.boundingRect(cnt);
+                            const bboxArea = rect.width * rect.height;
+                            const fill = area / (bboxArea || 1);
+                            const asp  = Math.min(rect.width, rect.height) / (Math.max(rect.width, rect.height) || 1);
+
+                            // Square-ish: fill > 0.7 (actual squares fill well), aspect > 0.5
+                            if (fill >= 0.65 && asp >= 0.5) {
+                                const M  = cv.moments(cnt, false);
+                                const cx = M.m10 / (M.m00 || 1);
+                                const cy = M.m01 / (M.m00 || 1);
+                                candidates.push({ x: cx, y: cy, area });
+                            }
                         }
+                        approx.delete();
                     }
                     cnt.delete();
                 }
 
+                this._lastCandidateCount = candidates.length;
                 if (candidates.length < 4) return null;
 
-                // Sort by area descending → take 4 largest (markers are the biggest squares)
+                // Top 4 by area
                 candidates.sort((a, b) => b.area - a.area);
-
-                // If the 4th-largest is much smaller than the 1st, skip (unlikely all 4 are markers)
-                // (allow 10× size variation due to perspective foreshortening)
                 const top4 = candidates.slice(0, 4);
-                const maxA = top4[0].area, minA = top4[3].area;
-                if (minA * 10 < maxA) return null;
+
+                // Reject if sizes differ too much (max 8× ratio for perspective)
+                const maxA = top4[0].area, minA2 = top4[3].area;
+                if (minA2 * 8 < maxA) return null;
 
                 return this._sortCorners(top4);
 
@@ -281,25 +295,23 @@
             }
         }
 
-        /** Sort 4 centroids into { TL, TR, BL, BR } by position. */
         _sortCorners(pts) {
-            const s   = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y));
-            const TL  = s[0], BR = s[3];
-            const mid = [s[1], s[2]].sort((a, b) => a.x - b.x);
-            return { TL, TR: mid[1], BL: mid[0], BR };
+            // Sort by (x + y) → smallest = TL, largest = BR
+            const sorted = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y));
+            const TL = sorted[0], BR = sorted[3];
+            // Sort the middle two by (x - y) → larger = TR, smaller = BL
+            const mid = [sorted[1], sorted[2]].sort((a, b) => (b.x - b.y) - (a.x - a.y));
+            return { TL, TR: mid[0], BL: mid[1], BR };
         }
 
-        // ── Perspective warp ─────────────────────────────────────────────────
+        // ── Warp ─────────────────────────────────────────────────────────────
 
-        /** Warp the captured frame so that the 4 marker centroids map to the
-         *  corners of the CS×CS canonical canvas.  Returns false on error. */
         _warpPerspective(quad, VW, VH) {
             let src = null, srcPts = null, dstPts = null, M = null, dst = null;
             try {
                 const imgData = this._capCtx.getImageData(0, 0, VW, VH);
                 src = cv.matFromImageData(imgData);
 
-                // Order: TL → TR → BR → BL  (must match dst order)
                 srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
                     quad.TL.x, quad.TL.y,
                     quad.TR.x, quad.TR.y,
@@ -318,7 +330,6 @@
                 cv.warpPerspective(src, dst, M, new cv.Size(CS, CS),
                                    cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
 
-                // Render to internal canvas for pixel sampling
                 cv.imshow(this._warpCanvas, dst);
                 return true;
             } catch (e) {
@@ -331,9 +342,6 @@
 
         // ── Calibration ──────────────────────────────────────────────────────
 
-        /** Start accumulating calibration frames.
-         *  The sender must be showing the calibration colour grid.
-         *  @param {() => void} onDone */
         startCalibration(onDone) {
             this._calibSamples = [];
             this._calibDone    = onDone;
@@ -351,14 +359,12 @@
             if (this._calibSamples.length >= 30) {
                 const N = this._calibSamples.length;
 
-                // Average each colour cell across all frames
                 this.refColors = [0, 1, 2, 3].map(ci => ({
                     r: this._calibSamples.reduce((s, f) => s + f.cells[ci].r, 0) / N,
                     g: this._calibSamples.reduce((s, f) => s + f.cells[ci].g, 0) / N,
                     b: this._calibSamples.reduce((s, f) => s + f.cells[ci].b, 0) / N,
                 }));
 
-                // Clock threshold: midpoint between white-cell luma and black-clock luma
                 const whiteLuma = 0.299 * this.refColors[0].r +
                                   0.587 * this.refColors[0].g +
                                   0.114 * this.refColors[0].b;
@@ -370,7 +376,7 @@
 
                 this._calibrating   = false;
                 this.calibrated     = true;
-                this.lastClockState = null;
+                this.lastClockState = 'B';
                 this._debounce      = [];
 
                 if (this._calibDone) this._calibDone();
@@ -379,7 +385,6 @@
 
         // ── Pixel helpers ────────────────────────────────────────────────────
 
-        /** Mean RGB in a square patch centred at (cx, cy) with half-width hw. */
         _mean(pixels, W, H, cx, cy, hw) {
             const x0 = Math.max(0, Math.round(cx - hw));
             const x1 = Math.min(W - 1, Math.round(cx + hw));
@@ -394,8 +399,6 @@
             return n ? { r: r / n, g: g / n, b: b / n } : { r: 0, g: 0, b: 0 };
         }
 
-        /** Nearest-centroid colour classification.
-         *  @returns {0|1|2|3}  0=WHITE, 1=RED, 2=GREEN, 3=BLUE */
         _classify(rgb) {
             let minD = Infinity, minI = 0;
             this.refColors.forEach((ref, i) => {
@@ -405,9 +408,8 @@
             return minI;
         }
 
-        /** Reset clock debounce and initialize lastClockState to current clock state to avoid spurious symbol trigger. */
         resetClock() {
-            this.lastClockState = 'B'; // Idle/calibration state clock is BLACK
+            this.lastClockState = 'B';
             this._debounce      = [];
         }
     }

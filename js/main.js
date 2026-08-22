@@ -1,31 +1,14 @@
 'use strict';
 // ─────────────────────────────────────────────────────────────────────────────
-// MAIN — State machines, UI wiring, role selection
-//
-// Boot sequence:
-//   1. Track OpenCV loading → update status dot
-//   2. On "Grant Permissions" → getUserMedia(video+audio) → release → unlock role cards
-//   3. Role selection → initSender() or initReceiver()
-//
-// Sender state machine:
-//   IDLE → CALIBRATE (show calib frame, wait READY tone)
-//        → ENCODE → TRANSMIT → AWAIT_ACK
-//        → ACK: IDLE  |  NACK/timeout: CALIBRATE (retransmit)
-//
-// Receiver state machine:
-//   IDLE → CAMERA ON → CALIBRATE (30 frames)
-//        → READY tone → LISTEN (symbol accumulation, SYNC search)
-//        → decode → ACK, show result  |  timeout → NACK
+// MAIN — State machines, UI wiring, debug console
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
 
-    // ── Utility: screen navigation ────────────────────────────────────────────
     function show(id) {
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
         document.getElementById(id).classList.add('active');
     }
 
-    // ── Utility: timestamped log line ─────────────────────────────────────────
     function log(panelId, msg, type = '') {
         const el = document.getElementById(panelId);
         if (!el) return;
@@ -35,10 +18,9 @@
         line.textContent = `[${ts}] ${msg}`;
         el.appendChild(line);
         el.scrollTop = el.scrollHeight;
-        while (el.children.length > 60) el.removeChild(el.firstChild);
+        while (el.children.length > 80) el.removeChild(el.firstChild);
     }
 
-    // ── Utility: status badge ─────────────────────────────────────────────────
     function setBadge(id, text, type) {
         const el = document.getElementById(id);
         if (!el) return;
@@ -46,7 +28,6 @@
         el.className   = 'status-badge ' + (type || 'idle');
     }
 
-    // ── Utility: system-strip dot ─────────────────────────────────────────────
     function setDot(dotId, stateId, ok, label) {
         const dot = document.getElementById(dotId);
         const st  = document.getElementById(stateId);
@@ -54,9 +35,9 @@
         if (st)  st.textContent = label;
     }
 
-    // ════════════════════════════════════════════════════════════════════════════
-    //  HOMEPAGE — OpenCV status + Permissions
-    // ════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  HOME — OpenCV + Permissions
+    // ═══════════════════════════════════════════════════════════════════════════
     let _permGranted = false;
     let _cvOk        = false;
 
@@ -69,9 +50,8 @@
         }
     }
 
-    // ── Track OpenCV ──────────────────────────────────────────────────────────
     function initCvStatus() {
-        setDot('cv-dot', 'cv-state', null, 'loading…');
+        setDot('cv-dot', 'cv-state', null, 'loading');
         if (window._cvReady) {
             _cvOk = true;
             setDot('cv-dot', 'cv-state', true, 'ready');
@@ -82,7 +62,6 @@
             setDot('cv-dot', 'cv-state', true, 'ready');
             checkUnlock();
         });
-        // Poll fallback (in case the event already fired before listener attached)
         const poll = setInterval(() => {
             if (window._cvReady) {
                 clearInterval(poll);
@@ -95,52 +74,45 @@
         }, 500);
     }
 
-    // ── Grant permissions ─────────────────────────────────────────────────────
     document.getElementById('btn-grant-perms').onclick = async () => {
         const btn  = document.getElementById('btn-grant-perms');
         const hint = document.getElementById('perm-hint');
-        btn.disabled  = true;
-        btn.textContent = '⏳ Requesting…';
+        btn.disabled = true;
+        btn.textContent = 'Requesting…';
         hint.textContent = '';
 
-        // Ask for camera and mic simultaneously
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            stream.getTracks().forEach(t => t.stop());   // release immediately
-            setDot('cam-dot', 'cam-state', true,  'granted');
-            setDot('mic-dot', 'mic-state', true,  'granted');
+            stream.getTracks().forEach(t => t.stop());
+            setDot('cam-dot', 'cam-state', true, 'granted');
+            setDot('mic-dot', 'mic-state', true, 'granted');
             _permGranted = true;
-            hint.textContent = '✓ Permissions granted';
+            hint.textContent = 'Permissions granted';
             hint.style.color = 'var(--success)';
             checkUnlock();
         } catch (e) {
-            // Try them individually to give specific feedback
             let camOk = false, micOk = false;
-
             try {
-                const cs = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                const cs = await navigator.mediaDevices.getUserMedia({ video: true });
                 cs.getTracks().forEach(t => t.stop());
                 camOk = true;
             } catch (_) {}
-
             try {
-                const ms = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+                const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
                 ms.getTracks().forEach(t => t.stop());
                 micOk = true;
             } catch (_) {}
-
             setDot('cam-dot', 'cam-state', camOk, camOk ? 'granted' : 'denied');
             setDot('mic-dot', 'mic-state', micOk, micOk ? 'granted' : 'denied');
-
             if (camOk && micOk) {
                 _permGranted = true;
-                hint.textContent = '✓ Permissions granted';
+                hint.textContent = 'Permissions granted';
                 hint.style.color = 'var(--success)';
                 checkUnlock();
             } else {
-                btn.disabled     = false;
-                btn.textContent  = '🔑 Grant Camera & Microphone Access';
-                hint.textContent = '❌ Permission denied. Enable in browser settings and try again.';
+                btn.disabled = false;
+                btn.textContent = 'Grant Camera & Microphone Access';
+                hint.textContent = 'Permission denied — enable in browser settings.';
                 hint.style.color = 'var(--error)';
             }
         }
@@ -148,16 +120,11 @@
 
     initCvStatus();
 
-    // ════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
     //  SENDER
-    // ════════════════════════════════════════════════════════════════════════════
-    let TX          = null;
-    let SARX        = null;
-    let sState      = 'IDLE';
-    let sMsgBits    = [];
-    let sErrBit     = null;
-    let sRetransmit = false;
-    let sAckTimer   = null;
+    // ═══════════════════════════════════════════════════════════════════════════
+    let TX = null, SARX = null;
+    let sState = 'IDLE', sMsgBits = [], sErrBit = null, sRetransmit = false, sAckTimer = null;
 
     function initSender() {
         const canvas = document.getElementById('tx-canvas');
@@ -171,8 +138,8 @@
         SARX.onTone = onSenderTone;
         SARX.start().then(ok => {
             log('sender-log', ok
-                ? '🎤 Microphone ready — listening for ACK / NACK'
-                : '⚠️  Mic unavailable. ACK/NACK detection disabled.', ok ? '' : 'warn');
+                ? 'Microphone ready — listening for ACK/NACK'
+                : 'Mic unavailable. ACK/NACK detection disabled.', ok ? '' : 'warn');
         });
 
         document.getElementById('msg-bits').oninput   = () => { sanitizeBits(); validateSender(); };
@@ -192,7 +159,7 @@
 
         setSenderState('IDLE');
         validateSender();
-        log('sender-log', 'Sender ready. Tip: press ⛶ to go fullscreen for best detection accuracy.');
+        log('sender-log', 'Sender ready. Use fullscreen for best detection.');
     }
 
     function sanitizeBits() {
@@ -202,19 +169,18 @@
 
     function validateSender() {
         const bits = document.getElementById('msg-bits').value;
-        const ok   = bits.length > 0 && bits.length <= 20;
-        document.getElementById('btn-show-calib').disabled = !ok || sState !== 'IDLE';
+        document.getElementById('btn-show-calib').disabled = !(bits.length > 0 && bits.length <= 20 && sState === 'IDLE');
     }
 
     function setSenderState(st) {
         sState = st;
         const labels = {
-            IDLE:      ['IDLE',          'idle'],
-            CALIBRATE: ['CALIBRATE',     'calib'],
-            ENCODE:    ['ENCODE',        'active'],
-            TRANSMIT:  ['TRANSMIT ⟳',   'active'],
-            AWAIT_ACK: ['AWAIT ACK',     'calib'],
-            DONE:      ['DONE ✓',        'success'],
+            IDLE:      ['IDLE',       'idle'],
+            CALIBRATE: ['CALIBRATE',  'calib'],
+            ENCODE:    ['ENCODE',     'active'],
+            TRANSMIT:  ['TRANSMIT',   'active'],
+            AWAIT_ACK: ['AWAIT ACK',  'calib'],
+            DONE:      ['DONE',       'success'],
         };
         const [text, type] = labels[st] || [st, 'idle'];
         setBadge('sender-status-badge', text, type);
@@ -240,11 +206,11 @@
     function showCalibFrame() {
         setSenderState('CALIBRATE');
         TX.drawCalibration();
-        log('sender-log', '📺 Calibration frame displayed. Waiting for READY tone…');
+        log('sender-log', 'Calibration frame displayed. Waiting for READY tone from receiver…');
     }
 
     function onSenderTone(tone) {
-        log('sender-log', `🔊 Received tone: ${tone}`);
+        log('sender-log', `Received tone: ${tone}`);
         if (tone === 'READY' && sState === 'CALIBRATE') {
             doEncode();
         } else if (sState === 'AWAIT_ACK') {
@@ -252,10 +218,10 @@
             if (tone === 'ACK') {
                 setSenderState('DONE');
                 TX.drawIdle();
-                log('sender-log', '✅ ACK received — transmission complete!', 'success');
+                log('sender-log', 'ACK received — transmission complete.', 'success');
                 setTimeout(() => setSenderState('IDLE'), 2000);
             } else if (tone === 'NACK') {
-                log('sender-log', '⚠️  NACK received — retransmitting…', 'warn');
+                log('sender-log', 'NACK received — retransmitting…', 'warn');
                 doRetransmit();
             }
         }
@@ -280,17 +246,14 @@
             TX.drawIdle();
             sAckTimer = setTimeout(() => {
                 if (sState === 'AWAIT_ACK') {
-                    log('sender-log', '⏱ ACK timeout — retransmitting…', 'warn');
+                    log('sender-log', 'ACK timeout — retransmitting…', 'warn');
                     doRetransmit();
                 }
             }, 5000);
         });
     }
 
-    function doRetransmit() {
-        sRetransmit = true;
-        showCalibFrame();
-    }
+    function doRetransmit() { sRetransmit = true; showCalibFrame(); }
 
     function resetSender() {
         clearTimeout(sAckTimer);
@@ -304,16 +267,15 @@
 
     function cleanupSender() {
         clearTimeout(sAckTimer);
-        if (TX)   TX.stop();
+        if (TX) TX.stop();
         if (SARX) SARX.stop();
     }
 
-    // Handle canvas resize when entering/exiting fullscreen
     document.addEventListener('fullscreenchange', () => {
         if (TX && document.querySelector('#screen-sender.active')) {
             const canvas = document.getElementById('tx-canvas');
             const isFs   = !!document.fullscreenElement;
-            const S      = isFs
+            const S = isFs
                 ? Math.min(window.screen.width, window.screen.height)
                 : Math.min(window.innerWidth, window.innerHeight) * 0.88;
             canvas.width = canvas.height = Math.floor(S);
@@ -332,21 +294,14 @@
         }
     });
 
-    // ════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
     //  RECEIVER
-    // ════════════════════════════════════════════════════════════════════════════
-    let RX            = null;
-    let rState        = 'IDLE';
-    let rBitBuf       = [];
-    let rSymCount     = 0;
-    let rListenTimer  = null;
-    let _overlayCtx   = null;
+    // ═══════════════════════════════════════════════════════════════════════════
+    let RX = null, rState = 'IDLE', rBitBuf = [], rSymCount = 0, rListenTimer = null, _overlayCtx = null;
 
     function initReceiver() {
         RX = null; rState = 'IDLE'; rBitBuf = []; rSymCount = 0;
-
-        const overlay = document.getElementById('rx-overlay');
-        _overlayCtx   = overlay.getContext('2d');
+        _overlayCtx = document.getElementById('rx-overlay').getContext('2d');
 
         document.getElementById('btn-start-camera').onclick   = startCamera;
         document.getElementById('btn-calibrate').onclick      = startCalibration;
@@ -354,10 +309,7 @@
         document.getElementById('receiver-back').onclick      = () => { cleanupReceiver(); show('screen-role'); };
 
         setRxState('IDLE');
-        log('receiver-log', 'Receiver ready. Press "Start Camera" to begin.');
-        if (!window._cvReady) {
-            log('receiver-log', '⏳ Waiting for OpenCV to finish loading…', 'warn');
-        }
+        log('receiver-log', 'Receiver ready. Start camera to begin.');
     }
 
     function setRxState(st) {
@@ -365,9 +317,9 @@
         const labels = {
             IDLE:        ['IDLE',         'idle'],
             'CAMERA ON': ['CAMERA ON',    'active'],
-            CALIBRATING: ['CALIBRATING…', 'calib'],
+            CALIBRATING: ['CALIBRATING',  'calib'],
             LISTEN:      ['LISTENING',    'active'],
-            DONE:        ['DONE ✓',       'success'],
+            DONE:        ['DONE',         'success'],
             NACK:        ['NACK SENT',    'warn'],
         };
         const [text, type] = labels[st] || [st, 'idle'];
@@ -386,11 +338,9 @@
             document.getElementById('btn-calibrate').disabled = false;
             document.getElementById('camera-hint').style.display = 'none';
             setRxState('CAMERA ON');
-            log('receiver-log', '📷 Camera started.');
-            log('receiver-log', '  Aim at sender\'s screen → press Calibrate when calib frame visible.');
-            if (!window._cvReady) log('receiver-log', '⏳ Still waiting for OpenCV…', 'warn');
+            log('receiver-log', 'Camera started. Aim at sender screen, then press Calibrate.');
         } else {
-            log('receiver-log', '❌ Camera access denied. Check browser permissions.', 'error');
+            log('receiver-log', 'Camera access denied.', 'error');
             document.getElementById('btn-start-camera').disabled = false;
         }
     }
@@ -398,17 +348,23 @@
     function startCalibration() {
         if (!RX) return;
         if (!window._cvReady) {
-            log('receiver-log', '⚠️  OpenCV not ready yet. Please wait.', 'warn');
+            log('receiver-log', 'OpenCV not ready yet.', 'warn');
             return;
         }
         document.getElementById('btn-calibrate').disabled = true;
         setRxState('CALIBRATING');
-        log('receiver-log', 'Sampling calibration colours (30 frames ≈ 1 s)…');
+        log('receiver-log', 'Sampling calibration colours (30 frames)…');
         RX.startCalibration(() => {
-            log('receiver-log', '✅ Calibration complete!', 'success');
-            log('receiver-log', `   Clock midpoint luma: ${RX.clockMidLuma.toFixed(1)}`);
+            log('receiver-log', 'Calibration complete.', 'success');
+            log('receiver-log', `  Clock midpoint luma: ${RX.clockMidLuma.toFixed(1)}`);
+            if (RX.refColors) {
+                RX.refColors.forEach((c, i) => {
+                    log('receiver-log', `  Ref[${Framing.COLOR_NAMES[i]}]: R=${c.r.toFixed(0)} G=${c.g.toFixed(0)} B=${c.b.toFixed(0)}`);
+                });
+            }
+            log('receiver-log', 'Sending READY tone…');
             AudioTX.playTone('READY').then(() => {
-                log('receiver-log', '🔊 READY tone sent → listening…');
+                log('receiver-log', 'READY tone sent. Listening for data…');
                 startListening();
             });
         });
@@ -421,7 +377,7 @@
         document.getElementById('rx-result-area').classList.add('hidden');
         rListenTimer = setTimeout(() => {
             if (rState === 'LISTEN') {
-                log('receiver-log', '⏱ Listen timeout — sending NACK', 'warn');
+                log('receiver-log', 'Listen timeout — sending NACK.', 'warn');
                 sendNack();
             }
         }, 20000);
@@ -431,7 +387,6 @@
         if (rState !== 'LISTEN') return;
         rSymCount++;
 
-        // 4 cells × 2 bits each = 8 bits per symbol
         for (const c of cells) {
             rBitBuf.push((c >> 1) & 1);
             rBitBuf.push(c & 1);
@@ -445,16 +400,16 @@
         if (result) {
             clearTimeout(rListenTimer);
             setRxState('DONE');
-            log('receiver-log', `✅ Frame decoded! L=${result.L}  msg=${result.messageBits.join('')}`, 'success');
+            log('receiver-log', `Frame decoded. L=${result.L}  msg=${result.messageBits.join('')}`, 'success');
             if (result.errorMsgBitIdx !== null) {
-                log('receiver-log', `⚠️  Error corrected at message bit ${result.errorMsgBitIdx}`, 'warn');
+                log('receiver-log', `Error corrected at message bit ${result.errorMsgBitIdx}`, 'warn');
             } else if (result.errorDataIdx !== null) {
-                log('receiver-log', '⚠️  Parity-bit error corrected (message intact)', 'warn');
+                log('receiver-log', 'Parity-bit error corrected (message intact).', 'warn');
             } else {
-                log('receiver-log', '   No bit errors detected.');
+                log('receiver-log', 'No bit errors detected.');
             }
             showResult(result);
-            AudioTX.playTone('ACK').then(() => log('receiver-log', '🔊 ACK sent.'));
+            AudioTX.playTone('ACK').then(() => log('receiver-log', 'ACK sent.'));
         }
     }
 
@@ -465,9 +420,7 @@
         const metaEl = document.getElementById('rx-meta');
         area.classList.remove('hidden');
 
-        const bits   = result.messageBits;
-        const errIdx = result.errorMsgBitIdx;
-
+        const bits = result.messageBits, errIdx = result.errorMsgBitIdx;
         if (errIdx !== null && errIdx < bits.length) {
             let html = '';
             bits.forEach((b, i) => {
@@ -476,7 +429,7 @@
                     : `${b}`;
             });
             msgEl.innerHTML = html;
-            errEl.textContent = `⚠  Bit ${errIdx} (0-indexed) was in error and has been corrected.`;
+            errEl.textContent = `Bit ${errIdx} (0-indexed) was in error and has been corrected.`;
             errEl.className   = 'rx-err-info error';
         } else {
             msgEl.textContent = bits.join('');
@@ -489,7 +442,7 @@
     function sendNack() {
         setRxState('NACK');
         AudioTX.playTone('NACK').then(() => {
-            log('receiver-log', '🔊 NACK sent. Resetting — waiting for retransmit…');
+            log('receiver-log', 'NACK sent. Waiting for retransmit…');
             rBitBuf = []; rSymCount = 0;
             if (RX) RX.resetClock();
             setRxState('LISTEN');
@@ -499,11 +452,10 @@
         });
     }
 
-    // ── Debug panel + overlay ─────────────────────────────────────────────────
     function updateDebugPanel(info) {
-        // Status row
         const found = info.screenFound;
-        document.getElementById('dbg-markers').textContent = found ? '4/4 ✓' : 'searching…';
+        document.getElementById('dbg-markers').textContent =
+            found ? '4/4 detected' : `searching… (${info.candidateCount || 0} candidates)`;
 
         if (info.clockState !== undefined) {
             document.getElementById('dbg-clock').textContent =
@@ -512,8 +464,11 @@
         if (info.cellColors !== undefined) {
             document.getElementById('dbg-cells').textContent = info.cellColors.join(' ');
         }
+        if (info.cellRgb !== undefined) {
+            const el = document.getElementById('dbg-rgb');
+            if (el) el.textContent = info.cellRgb.join(' ');
+        }
 
-        // Draw quad overlay
         if (_overlayCtx) drawQuadOverlay(info.quad || null);
     }
 
@@ -529,13 +484,10 @@
 
         const sx = overlay.width  / video.videoWidth;
         const sy = overlay.height / video.videoHeight;
-
-        // Scale from video native → display pixels
         const pts = [quad.TL, quad.TR, quad.BR, quad.BL].map(p => ({
             x: p.x * sx, y: p.y * sy
         }));
 
-        // Fill
         ctx.fillStyle = 'rgba(34,211,165,0.10)';
         ctx.beginPath();
         ctx.moveTo(pts[0].x, pts[0].y);
@@ -543,12 +495,10 @@
         ctx.closePath();
         ctx.fill();
 
-        // Stroke
         ctx.strokeStyle = '#22d3a5';
         ctx.lineWidth   = 2;
         ctx.stroke();
 
-        // Corner dots
         pts.forEach(p => {
             ctx.beginPath();
             ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
@@ -563,8 +513,8 @@
         setRxState('IDLE');
         document.getElementById('rx-result-area').classList.add('hidden');
         document.getElementById('receiver-log').innerHTML = '';
-        ['dbg-markers', 'dbg-clock', 'dbg-cells', 'dbg-symbols', 'dbg-bits']
-            .forEach(id => { document.getElementById(id).textContent = '—'; });
+        ['dbg-markers', 'dbg-clock', 'dbg-cells', 'dbg-rgb', 'dbg-symbols', 'dbg-bits']
+            .forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '—'; });
         if (_overlayCtx) {
             const o = document.getElementById('rx-overlay');
             _overlayCtx.clearRect(0, 0, o.width, o.height);
@@ -574,7 +524,7 @@
             RX.resetClock();
             document.getElementById('btn-calibrate').disabled = false;
         }
-        log('receiver-log', 'Reset. Press Calibrate to start again.');
+        log('receiver-log', 'Reset. Press Calibrate to restart.');
     }
 
     function cleanupReceiver() {
@@ -582,64 +532,130 @@
         if (RX) RX.stop();
     }
 
-    // ════════════════════════════════════════════════════════════════════════════
-    //  DEBUG LAB
-    // ════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  DEBUG CONSOLE
+    // ═══════════════════════════════════════════════════════════════════════════
     let debugAudioRX = null;
+    let debugRX      = null;
+    let _dbgWarpCtx  = null;
+    let _dbgWarpTimer = null;
 
     function initDebugLab() {
+        // Audio tone buttons
         document.getElementById('btn-dbg-ready').onclick = () => {
             AudioTX.playTone('READY');
-            log('debug-log', 'Playing READY tone (700 Hz, 600 ms)');
+            log('debug-log', 'Playing READY tone (440+554 Hz, 800 ms)');
         };
         document.getElementById('btn-dbg-ack').onclick = () => {
             AudioTX.playTone('ACK');
-            log('debug-log', 'Playing ACK tone (1600 Hz, 400 ms)');
+            log('debug-log', 'Playing ACK tone (1760+2217 Hz, 350 ms)');
         };
         document.getElementById('btn-dbg-nack').onclick = () => {
             AudioTX.playTone('NACK');
-            log('debug-log', 'Playing NACK tone (2500 Hz, 850 ms)');
+            log('debug-log', 'Playing NACK tone (220+277 Hz, 1000 ms)');
         };
 
+        // Tone detector
         const btnStart = document.getElementById('btn-dbg-listen-start');
         const btnStop  = document.getElementById('btn-dbg-listen-stop');
 
         btnStart.onclick = async () => {
-            if (!debugAudioRX) {
-                debugAudioRX = new AudioRX();
-                debugAudioRX.onTone = (name) => {
-                    document.getElementById('dbg-tone-name').textContent = name;
-                    log('debug-log', `🎯 Detected Tone: ${name}`, 'success');
-                };
-            }
+            debugAudioRX = new AudioRX();
+            debugAudioRX.onTone = (name) => {
+                document.getElementById('dbg-tone-name').textContent = name;
+                log('debug-log', `Detected: ${name}`, 'success');
+            };
+            debugAudioRX.onDebugPoll = (info) => {
+                const el = document.getElementById('dbg-fft-info');
+                if (!el) return;
+                const lines = [];
+                for (const [name, data] of Object.entries(info)) {
+                    const passStr = data.pass ? 'PASS' : '----';
+                    lines.push(`${name.padEnd(6)} peaks=[${data.peaks.join(', ')}] dB  noise=${data.noise} dB  ${passStr}`);
+                }
+                el.textContent = lines.join('\n');
+            };
             const ok = await debugAudioRX.start();
             if (ok) {
                 btnStart.disabled = true;
-                btnStop.disabled = false;
-                log('debug-log', '🎤 Microphone tone detector started.');
+                btnStop.disabled  = false;
+                log('debug-log', 'Mic tone detector started.');
             } else {
-                log('debug-log', '❌ Microphone start failed.', 'error');
+                log('debug-log', 'Microphone start failed.', 'error');
             }
         };
 
         btnStop.onclick = () => {
-            if (debugAudioRX) debugAudioRX.stop();
+            if (debugAudioRX) { debugAudioRX.stop(); debugAudioRX = null; }
             btnStart.disabled = false;
-            btnStop.disabled = true;
-            log('debug-log', '⏹ Detector stopped.');
+            btnStop.disabled  = true;
+            log('debug-log', 'Detector stopped.');
+        };
+
+        // Vision pipeline debug
+        const btnCamStart = document.getElementById('btn-dbg-cam-start');
+        const btnCamStop  = document.getElementById('btn-dbg-cam-stop');
+        _dbgWarpCtx = document.getElementById('dbg-warp-canvas').getContext('2d');
+
+        btnCamStart.onclick = async () => {
+            const video = document.getElementById('dbg-video');
+            debugRX = new PhysicalRX(video);
+            debugRX.onDebug = updateDebugVision;
+            const ok = await debugRX.start();
+            if (ok) {
+                btnCamStart.disabled = true;
+                btnCamStop.disabled  = false;
+                log('debug-log', 'Debug camera feed started.');
+                // Periodically copy warped canvas to debug view
+                _dbgWarpTimer = setInterval(() => {
+                    const wc = debugRX.getWarpedCanvas();
+                    if (wc && _dbgWarpCtx) {
+                        const dc = document.getElementById('dbg-warp-canvas');
+                        _dbgWarpCtx.drawImage(wc, 0, 0, dc.width, dc.height);
+                    }
+                }, 100);
+            } else {
+                log('debug-log', 'Camera start failed.', 'error');
+            }
+        };
+
+        btnCamStop.onclick = () => {
+            if (debugRX) { debugRX.stop(); debugRX = null; }
+            if (_dbgWarpTimer) { clearInterval(_dbgWarpTimer); _dbgWarpTimer = null; }
+            btnCamStart.disabled = false;
+            btnCamStop.disabled  = true;
+            log('debug-log', 'Debug camera stopped.');
         };
 
         document.getElementById('debug-back').onclick = () => {
-            if (debugAudioRX) debugAudioRX.stop();
-            btnStart.disabled = false;
-            btnStop.disabled = true;
+            if (debugAudioRX) { debugAudioRX.stop(); debugAudioRX = null; }
+            if (debugRX) { debugRX.stop(); debugRX = null; }
+            if (_dbgWarpTimer) { clearInterval(_dbgWarpTimer); _dbgWarpTimer = null; }
             show('screen-role');
         };
     }
 
-    // ════════════════════════════════════════════════════════════════════════════
+    function updateDebugVision(info) {
+        const found = info.screenFound;
+        const el = (id) => document.getElementById(id);
+
+        el('dbg-v-markers').textContent = found ? '4/4' : `0/4`;
+        el('dbg-v-candidates').textContent = info.candidateCount || '—';
+
+        if (info.clockState !== undefined) {
+            el('dbg-v-clock').textContent = `${info.clockState}  luma=${info.luma}  mid=${info.midLuma}`;
+        }
+        if (info.cellColors !== undefined) {
+            el('dbg-v-cells').textContent = info.cellColors.join(' ');
+        }
+        if (info.cellRgb !== undefined) {
+            el('dbg-v-rgb').textContent = info.cellRgb.join(' ');
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     //  ROLE SELECTION
-    // ════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
     document.getElementById('btn-role-sender').onclick = () => {
         show('screen-sender');
         initSender();

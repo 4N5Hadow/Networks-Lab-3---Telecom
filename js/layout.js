@@ -1,56 +1,79 @@
 'use strict';
 // ─────────────────────────────────────────────────────────────────────────────
-// LAYOUT CONSTANTS  (shared by sender canvas renderer and receiver sampler)
+// LAYOUT CONSTANTS  — Shared by sender canvas and receiver sampler
 //
-// Two coordinate systems:
-//   A) Canvas-fraction  (PAD_F, MARKER_F, etc.) — for drawing
-//   B) Bilinear / CANON  — for receiver sampling after perspective warp
+// The sender canvas is a square of side S.
+// Layout (fraction of S):
 //
-// CANON_SIZE = 400 px (square canonical view after warpPerspective)
-// In the canonical view, the perspective transform maps:
-//   camera TL-marker-centroid → (0,   0)
-//   camera TR-marker-centroid → (400, 0)
-//   camera BL-marker-centroid → (0,   400)
-//   camera BR-marker-centroid → (400, 400)
+//   PAD (3% each side) → active area = 94% of S
+//   Inside active area:
+//     4 corner markers: 8% of S each (solid black squares)
+//     Clock cell: 6% of S, centred top, between TL and TR markers
+//     Data grid: 2×2 cells, each 18% of S — centred in active area
+//       → grid occupies 36% × 36% of S (much larger than before)
 //
-// LAYOUT positions (u, v) multiplied by CANON_SIZE give canonical pixel coords.
+// Canonical coordinate system (after warpPerspective):
+//   The perspective transform maps marker CENTROIDS to the corners of
+//   a CANON_SIZE × CANON_SIZE square. Because marker centroids are at
+//   (pad + mS/2) from the canvas edge, the canonical space origin
+//   corresponds to TL marker centroid, not the canvas corner.
+//
+//   In canonical space, the "marker span" (centroid-to-centroid distance)
+//   equals CANON_SIZE on each axis.
+//
+//   Canonical positions:
+//     clock:  x=CANON_SIZE/2, y = clockCentreY_relative_to_TL_centroid
+//     cells:  computed from grid centre relative to marker centroids
 // ─────────────────────────────────────────────────────────────────────────────
 const LAYOUT = Object.freeze({
     // ── Canvas drawing fractions (of square canvas side S) ────────────────────
-    PAD_F:      0.05,   // border padding
-    MARKER_F:   0.108,  // finder marker side  (= 0.9 × 0.12)
-    CLOCK_F:    0.081,  // clock cell side     (= 0.9 × 0.09)
-    CELL_F:     0.135,  // data cell side      (= 0.9 × 0.15)
-    CLOCK_GAP:  8,      // px gap between marker bottom and clock top
-
-    // ── Bilinear normalised positions ─────────────────────────────────────────
-    // Reference quad: TL→(0,0)  TR→(1,0)  BL→(0,1)  BR→(1,1)
-    // (Derived: u_cell = (active/2 − cellS/2 − markerS/2) / markerSpan ≈ 0.414)
-    CLOCK_U: 0.500,
-    CLOCK_V: 0.133,
-    CELLS: Object.freeze([
-        Object.freeze({ u: 0.414, v: 0.414 }),  // TL
-        Object.freeze({ u: 0.586, v: 0.414 }),  // TR
-        Object.freeze({ u: 0.414, v: 0.586 }),  // BL
-        Object.freeze({ u: 0.586, v: 0.586 }),  // BR
-    ]),
+    PAD_F:      0.03,    // border padding
+    MARKER_F:   0.08,    // finder marker side
+    CLOCK_F:    0.06,    // clock cell side
+    CELL_F:     0.18,    // data cell side (was 0.135 — now 33% bigger)
+    CLOCK_GAP:  6,       // px gap between marker bottom edge and clock top edge
 
     // ── OpenCV canonical warp constants ──────────────────────────────────────
-    CANON_SIZE: 400,   // pixels (square output of warpPerspective)
+    //
+    // After warp, marker centroids map to (0,0), (CS,0), (0,CS), (CS,CS).
+    // All positions below are in this canonical space.
+    //
+    // Derivation:
+    //   pad  = PAD_F * S = 0.03S
+    //   mS   = MARKER_F * S = 0.08S
+    //   act  = (1 - 2*PAD_F) * S = 0.94S
+    //
+    //   TL marker centroid (canvas): (pad + mS/2, pad + mS/2) = (0.07S, 0.07S)
+    //   TR marker centroid (canvas): (pad + act - mS/2, pad + mS/2) = (0.93S, 0.07S)
+    //   Marker span = 0.93S - 0.07S = 0.86S
+    //
+    //   In canonical space, 0.86S maps to CANON_SIZE.
+    //   Scale factor: k = CANON_SIZE / (0.86 * S)
+    //
+    //   Clock centre (canvas): x = S/2, y = pad + mS + CLOCK_GAP + ckS/2
+    //     relative to TL centroid: dx = S/2 - 0.07S = 0.43S, dy depends on S
+    //     For S=400: y_canvas = 12 + 32 + 6 + 12 = 62, TL_centroid_y = 28
+    //       dy = 62 - 28 = 34, canonical_y = 34 * (400 / 344) ≈ 40
+    //       dx = 200 - 28 = 172, canonical_x = 172 * (400/344) ≈ 200
+    //     → clock at (200, 40) with hw ≈ 10
+    //
+    //   Grid centre (canvas): (S/2, S/2) = (0.5S, 0.5S)
+    //     relative to TL centroid: (0.43S, 0.43S)
+    //     canonical: 0.43/0.86 * CS = 0.5 * CS = 200
+    //     → grid centre at (200, 200)
+    //   Cell size in canonical: CELL_F / 0.86 * CS = 0.18/0.86 * 400 ≈ 84 px
+    //     → half cell ≈ 42, cell centres at 200 ± 42 = {158, 242}
+    //     → sample hw = 60% of half-cell = 25 px
+    //
+    CANON_SIZE: 400,
 
-    // Clock cell in canonical pixel space
-    //   centre = (CLOCK_U × 400, CLOCK_V × 400) = (200, 53)
-    //   hw: inner 60 % of clock cell = CLOCK_F × CANON_SIZE / (2 × markerSpan/markerSpan) × 0.6
-    //     ≈ 0.081 × 400 / 0.792 × 0.3 ≈ 12 px
-    CANON_CLOCK: Object.freeze({ x: 200, y: 53, hw: 12 }),
+    CANON_CLOCK: Object.freeze({ x: 200, y: 40, hw: 10 }),
 
-    // Data cells in canonical pixel space  (LAYOUT u,v × 400)
-    //   hw: inner 60 % of cell ≈ 0.135 × 400 / 0.792 × 0.3 ≈ 20 px
     CANON_CELLS: Object.freeze([
-        Object.freeze({ x: 166, y: 166, hw: 20 }),  // TL
-        Object.freeze({ x: 234, y: 166, hw: 20 }),  // TR
-        Object.freeze({ x: 166, y: 234, hw: 20 }),  // BL
-        Object.freeze({ x: 234, y: 234, hw: 20 }),  // BR
+        Object.freeze({ x: 158, y: 158, hw: 25 }),  // TL
+        Object.freeze({ x: 242, y: 158, hw: 25 }),  // TR
+        Object.freeze({ x: 158, y: 242, hw: 25 }),  // BL
+        Object.freeze({ x: 242, y: 242, hw: 25 }),  // BR
     ]),
 });
 

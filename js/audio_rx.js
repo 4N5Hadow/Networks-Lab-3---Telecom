@@ -1,28 +1,26 @@
 'use strict';
 // ─────────────────────────────────────────────────────────────────────────────
-// AUDIO RX  —  Tone detection via Web Audio AnalyserNode FFT
+// AUDIO RX  —  Chord-based tone detection via FFT
 //
-// Detection algorithm (two-gate):
-//   1. Peak energy inside a ±BAND_HZ window around each target frequency
-//      must exceed `threshold` (absolute dBFS gate).
-//   2. That peak must also exceed the current noise floor by at least
-//      `snrDb` dB (SNR gate). This rejects ambient noise that happens
-//      to hit the absolute threshold but is not a clean tone.
+// Each tone is a TWO-frequency chord. Detection requires BOTH frequencies
+// to be above threshold simultaneously, which dramatically reduces false
+// positives from ambient noise or harmonics.
 //
-// fftSize = 16384 → ~2.7 Hz/bin at 44.1 kHz, resolving 700 / 1600 / 2500 Hz
-// without ambiguity; the ±60 Hz band = ±22 bins, giving robust detection
-// even with a slightly off-pitch speaker.
-//
-// Cooldown = 800 ms prevents double-fires from echo/reverb.
+// Detection parameters:
+//   fftSize     = 8192  (~5.4 Hz/bin at 44.1 kHz)
+//   bandHz      = 40    (±40 Hz detection window per frequency)
+//   threshold   = -45 dBFS absolute
+//   snrDb       = 12 dB above noise floor per frequency
+//   cooldown    = 1200 ms (chords ring longer)
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
-    const TONES = Object.freeze([
-        { name: 'READY', hz:  700 },
-        { name: 'ACK',   hz: 1600 },
-        { name: 'NACK',  hz: 2500 },
+    // Must match AudioTX.TONE_SPECS
+    const CHORD_TONES = Object.freeze([
+        { name: 'READY', freqs: [440, 554]   },
+        { name: 'ACK',   freqs: [1760, 2217] },
+        { name: 'NACK',  freqs: [220, 277]   },
     ]);
-    const BAND_HZ = 60;    // ±Hz detection window
-    const SNR_DB  = 18;    // dB above noise floor required
+    const BAND_HZ = 40;
 
     class AudioRX {
         constructor() {
@@ -30,30 +28,29 @@
             this._analyser = null;
             this._stream   = null;
             this.running   = false;
-            /** Absolute dBFS floor — raise to reduce sensitivity, lower to increase. */
-            this.threshold = -40;
-            /** Minimum dB above noise mean. Raise if false positives occur. */
-            this.snrDb     = SNR_DB;
-            this.cooldown  = 800;   // ms
+            this.threshold = -45;   // dBFS
+            this.snrDb     = 12;    // dB above noise floor
+            this.cooldown  = 1200;  // ms
             this._lastFire = 0;
             this._timer    = null;
-            /** @type {((name: string) => void) | null} */
+            /** @type {((name: string) => void)|null} */
             this.onTone    = null;
+            /** @type {((info: object) => void)|null}
+             *  Debug callback, fired every poll with per-tone energy info */
+            this.onDebugPoll = null;
         }
 
-        /** Request microphone access and start polling every 80 ms.
-         *  @returns {Promise<boolean>} */
         async start() {
             try {
                 this._stream   = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 this._ctx      = new (window.AudioContext || window.webkitAudioContext)();
                 const src      = this._ctx.createMediaStreamSource(this._stream);
                 this._analyser = this._ctx.createAnalyser();
-                this._analyser.fftSize = 16384;   // high resolution
-                this._analyser.smoothingTimeConstant = 0.5;
+                this._analyser.fftSize = 8192;
+                this._analyser.smoothingTimeConstant = 0.4;
                 src.connect(this._analyser);
                 this.running = true;
-                this._timer  = setInterval(() => this._poll(), 80);
+                this._timer  = setInterval(() => this._poll(), 60);
                 return true;
             } catch (e) {
                 console.warn('[AudioRX] start failed:', e.message);
@@ -68,10 +65,6 @@
             if (this._ctx)    { this._ctx.close().catch(() => {}); }
         }
 
-        /** Adjust absolute sensitivity threshold (dBFS).
-         *  @param {number} dbfs  e.g. -50 (more sensitive) or -30 (less sensitive) */
-        setThreshold(dbfs) { this.threshold = dbfs; }
-
         _poll() {
             if (!this._analyser) return;
             const binCount = this._analyser.frequencyBinCount;
@@ -83,33 +76,51 @@
             const hzPerBin = sr / fftSz;
             const bandBins = Math.ceil(BAND_HZ / hzPerBin);
 
-            // Noise floor: mean of all bins (dBFS)
+            // Noise floor: median-ish via mean (good enough for speech-free environment)
             let noiseSum = 0;
             for (let i = 0; i < binCount; i++) noiseSum += buf[i];
             const noiseFloor = noiseSum / binCount;
 
-            for (const { name, hz } of TONES) {
-                const c  = Math.round(hz / hzPerBin);
-                const lo = Math.max(0, c - bandBins);
-                const hi = Math.min(binCount - 1, c + bandBins);
+            const debugInfo = {};
 
-                // Peak energy in the ±BAND_HZ window
-                let peak = -300;
-                for (let b = lo; b <= hi; b++) {
-                    if (buf[b] > peak) peak = buf[b];
+            for (const { name, freqs } of CHORD_TONES) {
+                let allPass = true;
+                const peaks = [];
+
+                for (const hz of freqs) {
+                    const c  = Math.round(hz / hzPerBin);
+                    const lo = Math.max(0, c - bandBins);
+                    const hi = Math.min(binCount - 1, c + bandBins);
+
+                    let peak = -300;
+                    for (let b = lo; b <= hi; b++) {
+                        if (buf[b] > peak) peak = buf[b];
+                    }
+                    peaks.push(peak);
+
+                    if (peak < this.threshold || (peak - noiseFloor) < this.snrDb) {
+                        allPass = false;
+                    }
                 }
 
-                // Gate 1: absolute threshold
-                // Gate 2: SNR above noise floor
-                if (peak > this.threshold && (peak - noiseFloor) > this.snrDb) {
+                debugInfo[name] = {
+                    peaks: peaks.map(p => p.toFixed(1)),
+                    noise: noiseFloor.toFixed(1),
+                    pass: allPass,
+                };
+
+                if (allPass) {
                     const now = Date.now();
                     if (now - this._lastFire > this.cooldown) {
                         this._lastFire = now;
+                        if (this.onDebugPoll) this.onDebugPoll(debugInfo);
                         if (this.onTone) this.onTone(name);
                     }
-                    return;  // only report the first matching tone per poll
+                    return;
                 }
             }
+
+            if (this.onDebugPoll) this.onDebugPoll(debugInfo);
         }
     }
 
