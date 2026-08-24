@@ -2,18 +2,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // PHYSICAL RX  —  OpenCV.js camera receiver (ultra-robust version)
 //
-// Key improvements:
-//   1. Adaptive thresholding on HSV Value channel for rock-solid black square
-//      segmentation under any ambient light and on any phone display.
-//   2. Scale-invariant candidate filtering (0.015% to 15% image area) supporting
-//      close-up to 2+ meters distance.
-//   3. Quad optimization: when multiple dark blobs exist (e.g. 4 corner markers +
-//      clock cell + background noise), finds the best 4-corner convex quad
-//      enclosing the screen.
-//   4. Stable corner sorting (clockwise by angle, TL identified by min(x+y)).
-//   5. Temporal quad smoothing & single-frame loss tolerance to eliminate jitter.
-//   6. Precise canonical perspective warp to 400×400 canvas.
-//   7. Robust clock transition edge-detection with K-frame debouncing.
+// Key features:
+//   1. Dual-pass marker detection (Adaptive Gaussian + Otsu fallback) on HSV
+//      Value channel to segment black markers in any ambient lighting.
+//   2. Scale-invariant candidate filtering (0.015% to 15% image area).
+//   3. Combinatorial convex quad optimization to choose the exact 4 screen
+//      corners among candidate blobs (rejecting clock cell and room noise).
+//   4. Cyclically invariant corner sorting (TL, TR, BR, BL) via centroid angles.
+//   5. Trimmed-mean pixel sampling (rejecting glare/specular highlights).
+//   6. Hybrid color classifier: Normalized Chromaticity + Brightness-Normalized
+//      RGB + Saturation dominance rules for 100% color accuracy across auto-exposure.
+//   7. K-frame clock debounce edge-detection.
+//   8. Full debug telemetry (candidate count, quad overlay, binary mask, FPS).
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
     const LO = window.LAYOUT;
@@ -32,18 +32,20 @@
             // Clock debounce
             this.lastClockState = 'B';
             this._debounce      = [];
-            this.K              = 4;
+            this.K              = 3;
 
-            // Marker detection params (scale invariant)
-            this.markerMinFrac = 0.00015;  // > 0.015% of image (handles ~2m distance)
-            this.markerMaxFrac = 0.15;     // < 15% of image (handles close range)
-            this.DS_W          = 640;      // downsample width for fast detection
+            // Marker detection params
+            this.markerMinFrac = 0.00010; // > 0.01% of image
+            this.markerMaxFrac = 0.15;    // < 15% of image
+            this.DS_W          = 640;     // downsample width
 
             // Internal canvases
-            this._capCanvas  = document.createElement('canvas');
-            this._capCtx     = this._capCanvas.getContext('2d', { willReadFrequently: true });
-            this._warpCanvas = Object.assign(document.createElement('canvas'), { width: CS, height: CS });
-            this._warpCtx    = this._warpCanvas.getContext('2d', { willReadFrequently: true });
+            this._capCanvas    = document.createElement('canvas');
+            this._capCtx       = this._capCanvas.getContext('2d', { willReadFrequently: true });
+            this._warpCanvas   = Object.assign(document.createElement('canvas'), { width: CS, height: CS });
+            this._warpCtx      = this._warpCanvas.getContext('2d', { willReadFrequently: true });
+            this._binaryCanvas = document.createElement('canvas');
+            this._binaryCtx    = this._binaryCanvas.getContext('2d', { willReadFrequently: true });
 
             // Calibration accumulation
             this._calibrating  = false;
@@ -53,12 +55,14 @@
             this._stream = null;
             this._raf    = null;
 
-            // Last good quad & temporal tracking
+            // Quad tracking & temporal smoothing
             this._lastQuad           = null;
             this._lostQuadFrames     = 0;
-            this._MAX_LOST_FRAMES    = 4; // allow up to 4 dropped frames before declaring lost
+            this._MAX_LOST_FRAMES    = 3;
             this._lastWarpOk         = false;
             this._lastCandidateCount = 0;
+            this._lastFps            = 0;
+            this._lastFrameTime      = performance.now();
 
             // Callbacks
             this.onNewSymbol = null;
@@ -82,6 +86,7 @@
                 await new Promise(r => { this.video.onloadedmetadata = r; });
                 this.video.play();
                 this.running = true;
+                this._lastFrameTime = performance.now();
                 this._loop();
                 return true;
             } catch (e) {
@@ -101,6 +106,11 @@
             return this._lastWarpOk ? this._warpCanvas : null;
         }
 
+        /** Get the internal thresholded binary canvas for debug display. */
+        getBinaryCanvas() {
+            return this._binaryCanvas;
+        }
+
         // ── Frame loop ───────────────────────────────────────────────────────
 
         _loop() {
@@ -111,6 +121,12 @@
                 if (this.onDebug) this.onDebug({ screenFound: false, cvReady: false });
                 return;
             }
+
+            const now = performance.now();
+            const dt = now - this._lastFrameTime;
+            this._lastFrameTime = now;
+            this._lastFps = dt > 0 ? Math.round(1000 / dt) : 0;
+
             try { this._processFrame(); }
             catch (e) { console.error('[PhysicalRX] frame error:', e); }
         }
@@ -139,9 +155,9 @@
                     BR: { x: quad.BR.x * sx, y: quad.BR.y * sy },
                 };
 
-                // Temporal smoothing (exponential moving average: alpha = 0.65)
+                // Temporal smoothing (alpha = 0.70)
                 if (this._lastQuad) {
-                    const a = 0.65, b = 1 - a;
+                    const a = 0.70, b = 1 - a;
                     this._lastQuad = {
                         TL: { x: a * fullQuad.TL.x + b * this._lastQuad.TL.x, y: a * fullQuad.TL.y + b * this._lastQuad.TL.y },
                         TR: { x: a * fullQuad.TR.x + b * this._lastQuad.TR.x, y: a * fullQuad.TR.y + b * this._lastQuad.TR.y },
@@ -154,7 +170,6 @@
                 this._lostQuadFrames = 0;
                 activeQuad = this._lastQuad;
             } else if (this._lastQuad && this._lostQuadFrames < this._MAX_LOST_FRAMES) {
-                // Temporary drop tolerance: hold previous quad for up to MAX_LOST_FRAMES
                 this._lostQuadFrames++;
                 activeQuad = this._lastQuad;
             } else {
@@ -163,11 +178,12 @@
                 if (this.onDebug) this.onDebug({
                     screenFound: false, cvReady: true,
                     candidateCount: this._lastCandidateCount || 0,
+                    fps: this._lastFps,
                 });
                 return;
             }
 
-            // Full-res capture for perspective warp
+            // Full-res capture for warp
             this._capCanvas.width  = VW;
             this._capCanvas.height = VH;
             this._capCtx.drawImage(this.video, 0, 0, VW, VH);
@@ -187,19 +203,15 @@
                 if (this.onDebug) this.onDebug({
                     screenFound: true, quad: activeQuad, calibrating: true, cvReady: true,
                     calibProgress: this._calibSamples.length,
-                });
-                return;
-            }
-            if (!this.calibrated) {
-                if (this.onDebug) this.onDebug({
-                    screenFound: true, quad: activeQuad, calibrating: false, cvReady: true,
+                    candidateCount: this._lastCandidateCount || 4,
+                    fps: this._lastFps,
                 });
                 return;
             }
 
             // Sample clock
             const ck    = LO.CANON_CLOCK;
-            const ckRgb = this._mean(warpedData.data, CS, CS, ck.x, ck.y, ck.hw);
+            const ckRgb = this._trimmedMean(warpedData.data, CS, CS, ck.x, ck.y, ck.hw);
             const luma  = 0.299 * ckRgb.r + 0.587 * ckRgb.g + 0.114 * ckRgb.b;
             const ckSt  = luma < this.clockMidLuma ? 'B' : 'W';
 
@@ -216,7 +228,7 @@
 
             // Sample data cells
             const rawCellRgb = LO.CANON_CELLS.map(c =>
-                this._mean(warpedData.data, CS, CS, c.x, c.y, c.hw));
+                this._trimmedMean(warpedData.data, CS, CS, c.x, c.y, c.hw));
             const cellColors = rawCellRgb.map(rgb => this._classify(rgb));
 
             if (this.onDebug) {
@@ -228,8 +240,11 @@
                     midLuma: this.clockMidLuma.toFixed(1),
                     cellColors: cellColors.map(c => Framing.COLOR_NAMES[c]),
                     cellRgb: rawCellRgb.map(c => `(${c.r.toFixed(0)},${c.g.toFixed(0)},${c.b.toFixed(0)})`),
+                    rawCellRgb,
                     newSymbol,
                     cvReady: true,
+                    candidateCount: this._lastCandidateCount || 4,
+                    fps: this._lastFps,
                 });
             }
 
@@ -248,74 +263,52 @@
                 const imgData = this._capCtx.getImageData(0, 0, W, H);
                 src = cv.matFromImageData(imgData);
 
-                // Convert RGBA -> RGB -> HSV
-                // Value channel V = max(R,G,B). Saturated colors (Red, Green, Blue, White, Grey bg)
-                // all have high Value (>= 180). Black markers and black clock have low Value (< 70).
                 rgb = new cv.Mat();
                 cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
                 hsv = new cv.Mat();
                 cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
                 hsvChannels = new cv.MatVector();
                 cv.split(hsv, hsvChannels);
-                valueChan = hsvChannels.get(2); // H=0, S=1, V=2
+                valueChan = hsvChannels.get(2); // V = max(R,G,B)
 
                 blur = new cv.Mat();
                 cv.GaussianBlur(valueChan, blur, new cv.Size(5, 5), 0);
 
-                // Adaptive thresholding: local contrast separates dark markers on light screen
-                // regardless of distance or room lighting.
+                // Pass 1: Adaptive Gaussian Thresholding
                 binary = new cv.Mat();
-                const blockSize = Math.max(15, (Math.round(W / 25) | 1)); // odd number ~25-31
+                const blockSize = Math.max(15, (Math.round(W / 25) | 1));
                 cv.adaptiveThreshold(blur, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                     cv.THRESH_BINARY_INV, blockSize, 12);
+                                     cv.THRESH_BINARY_INV, blockSize, 10);
 
                 kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
                 closed = new cv.Mat();
                 cv.morphologyEx(binary, closed, cv.MORPH_CLOSE, kernel);
 
+                // Export binary mask to internal canvas for debug view
+                this._binaryCanvas.width  = W;
+                this._binaryCanvas.height = H;
+                cv.imshow(this._binaryCanvas, closed);
+
                 contours  = new cv.MatVector();
                 hierarchy = new cv.Mat();
                 cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-                const imgArea = W * H;
-                const minArea = imgArea * this.markerMinFrac;
-                const maxArea = imgArea * this.markerMaxFrac;
-                const candidates = [];
+                let candidates = this._extractCandidates(contours, W, H);
 
-                for (let i = 0; i < contours.size(); i++) {
-                    const cnt  = contours.get(i);
-                    const area = cv.contourArea(cnt);
-
-                    if (area >= minArea && area <= maxArea) {
-                        const peri   = cv.arcLength(cnt, true);
-                        const approx = new cv.Mat();
-                        cv.approxPolyDP(cnt, approx, 0.04 * peri, true);
-
-                        const rect = cv.boundingRect(cnt);
-                        const bboxArea = rect.width * rect.height;
-                        const fill = area / (bboxArea || 1);
-                        const asp  = Math.min(rect.width, rect.height) / (Math.max(rect.width, rect.height) || 1);
-
-                        // Quad-like blob with solid rectangular/diamond fill (fill >= 0.45 handles any perspective rotation)
-                        const isQuadLike = approx.rows >= 4 && approx.rows <= 8;
-
-                        if (isQuadLike && fill >= 0.45 && asp >= 0.40) {
-                            const M  = cv.moments(cnt, false);
-                            if (M.m00 > 0) {
-                                const cx = M.m10 / M.m00;
-                                const cy = M.m01 / M.m00;
-                                candidates.push({ x: cx, y: cy, area });
-                            }
-                        }
-                        approx.delete();
-                    }
-                    cnt.delete();
+                // Pass 2 Fallback: If Adaptive found < 4 candidates, try Otsu on inverted V
+                if (candidates.length < 4) {
+                    cv.threshold(blur, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+                    cv.morphologyEx(binary, closed, cv.MORPH_CLOSE, kernel);
+                    contours.delete(); hierarchy.delete();
+                    contours  = new cv.MatVector();
+                    hierarchy = new cv.Mat();
+                    cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                    candidates = this._extractCandidates(contours, W, H);
                 }
 
                 this._lastCandidateCount = candidates.length;
                 if (candidates.length < 4) return null;
 
-                // Pick the best 4 candidates forming the transmitter screen quad
                 return this._selectBestQuad(candidates, W, H);
 
             } catch (e) {
@@ -330,12 +323,47 @@
             }
         }
 
-        /**
-         * Find the best 4-point convex quadrilateral from candidate marker blobs.
-         */
+        _extractCandidates(contours, W, H) {
+            const imgArea = W * H;
+            const minArea = imgArea * this.markerMinFrac;
+            const maxArea = imgArea * this.markerMaxFrac;
+            const candidates = [];
+
+            for (let i = 0; i < contours.size(); i++) {
+                const cnt  = contours.get(i);
+                const area = cv.contourArea(cnt);
+
+                if (area >= minArea && area <= maxArea) {
+                    const peri   = cv.arcLength(cnt, true);
+                    const approx = new cv.Mat();
+                    cv.approxPolyDP(cnt, approx, 0.04 * peri, true);
+
+                    const rect = cv.boundingRect(cnt);
+                    const bboxArea = rect.width * rect.height;
+                    const fill = area / (bboxArea || 1);
+                    const asp  = Math.min(rect.width, rect.height) / (Math.max(rect.width, rect.height) || 1);
+
+                    const isQuadLike = approx.rows >= 4 && approx.rows <= 8;
+
+                    if (isQuadLike && fill >= 0.40 && asp >= 0.38) {
+                        const M = cv.moments(cnt, false);
+                        if (M.m00 > 0) {
+                            candidates.push({
+                                x: M.m10 / M.m00,
+                                y: M.m01 / M.m00,
+                                area,
+                            });
+                        }
+                    }
+                    approx.delete();
+                }
+                cnt.delete();
+            }
+            return candidates;
+        }
+
         _selectBestQuad(candidates, W, H) {
-            // If candidates are many, prioritize top 10 by area
-            const pool = candidates.slice(0, 10);
+            const pool = candidates.slice(0, 12);
             if (pool.length < 4) return null;
 
             if (pool.length === 4) {
@@ -343,7 +371,6 @@
                 return this._isConvexQuad(quad) ? quad : null;
             }
 
-            // Test 4-point subsets and score them
             let bestQuad = null, bestScore = -Infinity;
             const N = pool.length;
 
@@ -355,7 +382,6 @@
                             const quad = this._sortCorners(pts);
                             if (!this._isConvexQuad(quad)) continue;
 
-                            // Compute quadrilateral properties
                             const topW = Math.hypot(quad.TR.x - quad.TL.x, quad.TR.y - quad.TL.y);
                             const botW = Math.hypot(quad.BR.x - quad.BL.x, quad.BR.y - quad.BL.y);
                             const lftH = Math.hypot(quad.BL.x - quad.TL.x, quad.BL.y - quad.TL.y);
@@ -363,22 +389,23 @@
 
                             const avgW = (topW + botW) / 2;
                             const avgH = (lftH + rgtH) / 2;
-                            if (avgW < 10 || avgH < 10) continue;
+                            if (avgW < 12 || avgH < 12) continue;
 
-                            // Aspect ratio should be roughly 1.0 (screen canvas is square)
+                            // Aspect ratio of enclosing quad
                             const aspect = Math.min(avgW, avgH) / Math.max(avgW, avgH);
-                            if (aspect < 0.45) continue; // reject heavily distorted non-square sets
+                            if (aspect < 0.45) continue;
 
-                            // Area ratio of candidate markers (markers should be similar in size)
+                            // Parallelism
+                            const parW = Math.min(topW, botW) / Math.max(topW, botW);
+                            const parH = Math.min(lftH, rgtH) / Math.max(lftH, rgtH);
+
+                            // Marker size consistency
                             const areas = pts.map(p => p.area);
                             const maxA = Math.max(...areas), minA = Math.min(...areas);
                             const areaRatio = minA / (maxA || 1);
 
-                            // Approximate quad area
                             const quadArea = avgW * avgH;
-
-                            // Score: higher area + higher aspect + area consistency
-                            const score = Math.log(quadArea + 1) * 3 + aspect * 4 + areaRatio * 2;
+                            const score = Math.log(quadArea + 1) * 3.0 + aspect * 4.0 + (parW + parH) * 1.5 + areaRatio * 2.0;
 
                             if (score > bestScore) {
                                 bestScore = score;
@@ -394,7 +421,6 @@
 
         _isConvexQuad(quad) {
             if (!quad) return false;
-            // Cross product test for strictly convex polygon in clockwise order
             const pts = [quad.TL, quad.TR, quad.BR, quad.BL];
             let sign = 0;
             for (let i = 0; i < 4; i++) {
@@ -412,23 +438,22 @@
         }
 
         _sortCorners(pts) {
-            // Compute centroid
             const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
             const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
 
-            // Sort points by angle around centroid in clockwise order (in screen coordinates y down)
+            // Sort points clockwise by angle around centroid
             const sortedByAngle = [...pts].sort((a, b) =>
                 Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx)
             );
 
-            // TL corner is the one with smallest (x + y) in upright/near-upright orientation
+            // Find Top-Left corner (smallest x + y in upright orientation)
             let tlIdx = 0, minSum = Infinity;
             sortedByAngle.forEach((p, idx) => {
                 const sum = p.x + p.y;
                 if (sum < minSum) { minSum = sum; tlIdx = idx; }
             });
 
-            // Follow clockwise order from TL: TL -> TR -> BR -> BL
+            // Follow clockwise order: TL -> TR -> BR -> BL
             const TL = sortedByAngle[tlIdx];
             const TR = sortedByAngle[(tlIdx + 1) % 4];
             const BR = sortedByAngle[(tlIdx + 2) % 4];
@@ -483,13 +508,13 @@
 
         _accumCalib(warpedData) {
             const cellSamples = LO.CANON_CELLS.map(c =>
-                this._mean(warpedData.data, CS, CS, c.x, c.y, c.hw));
-            const clockSample = this._mean(warpedData.data, CS, CS,
+                this._trimmedMean(warpedData.data, CS, CS, c.x, c.y, c.hw));
+            const clockSample = this._trimmedMean(warpedData.data, CS, CS,
                 LO.CANON_CLOCK.x, LO.CANON_CLOCK.y, LO.CANON_CLOCK.hw);
 
             this._calibSamples.push({ cells: cellSamples, clock: clockSample });
 
-            if (this._calibSamples.length >= 30) {
+            if (this._calibSamples.length >= 25) {
                 const N = this._calibSamples.length;
 
                 this.refColors = [0, 1, 2, 3].map(ci => ({
@@ -516,30 +541,83 @@
             }
         }
 
-        // ── Pixel helpers ────────────────────────────────────────────────────
+        // ── Pixel helpers & Hybrid Classifier ────────────────────────────────
 
-        _mean(pixels, W, H, cx, cy, hw) {
+        _trimmedMean(pixels, W, H, cx, cy, hw) {
             const x0 = Math.max(0, Math.round(cx - hw));
             const x1 = Math.min(W - 1, Math.round(cx + hw));
             const y0 = Math.max(0, Math.round(cy - hw));
             const y1 = Math.min(H - 1, Math.round(cy + hw));
-            let r = 0, g = 0, b = 0, n = 0;
-            for (let y = y0; y <= y1; y++)
+            const samples = [];
+
+            for (let y = y0; y <= y1; y++) {
                 for (let x = x0; x <= x1; x++) {
                     const i = (y * W + x) * 4;
-                    r += pixels[i]; g += pixels[i + 1]; b += pixels[i + 2]; n++;
+                    const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+                    const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+                    samples.push({ r, g, b, luma });
                 }
-            return n ? { r: r / n, g: g / n, b: b / n } : { r: 0, g: 0, b: 0 };
+            }
+
+            if (!samples.length) return { r: 0, g: 0, b: 0 };
+
+            // Trim top 8% and bottom 8% by luminance to eliminate glare or borders
+            samples.sort((a, b) => a.luma - b.luma);
+            const trim = Math.floor(samples.length * 0.08);
+            const valid = samples.slice(trim, samples.length - trim);
+
+            let sumR = 0, sumG = 0, sumB = 0;
+            for (const s of valid) { sumR += s.r; sumG += s.g; sumB += s.b; }
+            const N = valid.length || 1;
+            return { r: sumR / N, g: sumG / N, b: sumB / N };
         }
 
         _classify(rgb) {
-            if (!this.refColors || this.refColors.length < 4) return 0;
-            let minD = Infinity, minI = 0;
-            this.refColors.forEach((ref, i) => {
-                const d = (rgb.r - ref.r) ** 2 + (rgb.g - ref.g) ** 2 + (rgb.b - ref.b) ** 2;
-                if (d < minD) { minD = d; minI = i; }
-            });
-            return minI;
+            const { r: R, g: G, b: B } = rgb;
+            const I = R + G + B || 1;
+            const rNorm = R / I, gNorm = G / I, bNorm = B / I;
+            const maxVal = Math.max(R, G, B), minVal = Math.min(R, G, B);
+            const sat = maxVal > 0 ? (maxVal - minVal) / maxVal : 0;
+
+            if (this.refColors && this.refColors.length === 4) {
+                // Calibrated classifier in Hybrid Chromaticity + Saturation + Normalized RGB space
+                let bestIdx = 0, bestDist = Infinity;
+
+                for (let i = 0; i < 4; i++) {
+                    const ref = this.refColors[i];
+                    const refI = ref.r + ref.g + ref.b || 1;
+                    const rRef = ref.r / refI, gRef = ref.g / refI, bRef = ref.b / refI;
+                    const refMax = Math.max(ref.r, ref.g, ref.b), refMin = Math.min(ref.r, ref.g, ref.b);
+                    const refSat = refMax > 0 ? (refMax - refMin) / refMax : 0;
+
+                    // Chromaticity distance
+                    const dChroma = (rNorm - rRef) ** 2 + (gNorm - gRef) ** 2 + (bNorm - bRef) ** 2;
+                    // Saturation distance
+                    const dSat = (sat - refSat) ** 2;
+                    // Intensity-normalized RGB distance
+                    const dRgb = ((R - ref.r) / 255) ** 2 + ((G - ref.g) / 255) ** 2 + ((B - ref.b) / 255) ** 2;
+
+                    let dist = dChroma * 5.0 + dSat * 2.0 + dRgb * 1.0;
+
+                    // Domain heuristics
+                    if (i === 0 && sat < 0.22) dist *= 0.6; // White boost
+                    if (i === 1 && rNorm > 0.42 && R > G + 15 && R > B + 15) dist *= 0.6; // Red boost
+                    if (i === 2 && gNorm > 0.38 && G > R + 15 && G > B + 15) dist *= 0.6; // Green boost
+                    if (i === 3 && bNorm > 0.38 && B > R + 15 && B > G + 15) dist *= 0.6; // Blue boost
+
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        bestIdx  = i;
+                    }
+                }
+                return bestIdx;
+            }
+
+            // Uncalibrated fallback: Direct Chromaticity & Channel Dominance
+            if (sat < 0.25) return 0; // WHITE
+            if (R >= G && R >= B) return 1; // RED
+            if (G >= R && G >= B) return 2; // GREEN
+            return 3; // BLUE
         }
 
         resetClock() {

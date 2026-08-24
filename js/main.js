@@ -676,7 +676,10 @@
         // Vision debug
         const btnCamStart = document.getElementById('btn-dbg-cam-start');
         const btnCamStop  = document.getElementById('btn-dbg-cam-stop');
+        const btnDbgCalib = document.getElementById('btn-dbg-calib');
         _dbgWarpCtx = document.getElementById('dbg-warp-canvas').getContext('2d');
+        const dbgBinaryCtx = document.getElementById('dbg-binary-canvas').getContext('2d');
+        const dbgOverlayCtx = document.getElementById('dbg-overlay').getContext('2d');
 
         btnCamStart.onclick = async () => {
             const video = document.getElementById('dbg-video');
@@ -686,24 +689,53 @@
             if (ok) {
                 btnCamStart.disabled = true;
                 btnCamStop.disabled  = false;
+                if (btnDbgCalib) btnDbgCalib.disabled = false;
                 log('debug-log', 'Debug camera started.');
+
                 _dbgWarpTimer = setInterval(() => {
+                    if (!debugRX) return;
+                    // Render Warped View
                     const wc = debugRX.getWarpedCanvas();
                     if (wc && _dbgWarpCtx) {
                         const dc = document.getElementById('dbg-warp-canvas');
                         _dbgWarpCtx.drawImage(wc, 0, 0, dc.width, dc.height);
                     }
-                }, 100);
+                    // Render Binary Mask
+                    const bc = debugRX.getBinaryCanvas();
+                    if (bc && dbgBinaryCtx) {
+                        const bEl = document.getElementById('dbg-binary-canvas');
+                        dbgBinaryCtx.drawImage(bc, 0, 0, bEl.width, bEl.height);
+                    }
+                }, 60);
             } else {
                 log('debug-log', 'Camera start failed.', 'error');
             }
         };
+
+        if (btnDbgCalib) {
+            btnDbgCalib.onclick = () => {
+                if (!debugRX) return;
+                btnDbgCalib.disabled = true;
+                log('debug-log', 'Sampling 25 calibration frames in debug mode…');
+                debugRX.startCalibration(() => {
+                    btnDbgCalib.disabled = false;
+                    log('debug-log', 'Debug calibration complete!', 'success');
+                    log('debug-log', `Clock midpoint luma: ${debugRX.clockMidLuma.toFixed(1)}`);
+                    if (debugRX.refColors) {
+                        debugRX.refColors.forEach((c, i) => {
+                            log('debug-log', `  Ref[${Framing.COLOR_NAMES[i]}]: R=${c.r.toFixed(0)} G=${c.g.toFixed(0)} B=${c.b.toFixed(0)}`);
+                        });
+                    }
+                });
+            };
+        }
 
         btnCamStop.onclick = () => {
             if (debugRX) { debugRX.stop(); debugRX = null; }
             if (_dbgWarpTimer) { clearInterval(_dbgWarpTimer); _dbgWarpTimer = null; }
             btnCamStart.disabled = false;
             btnCamStop.disabled  = true;
+            if (btnDbgCalib) btnDbgCalib.disabled = true;
             log('debug-log', 'Debug camera stopped.');
         };
 
@@ -717,14 +749,73 @@
 
     function updateDebugVision(info) {
         const el = (id) => document.getElementById(id);
-        el('dbg-v-markers').textContent = info.screenFound ? '4/4' : '0/4';
-        el('dbg-v-candidates').textContent = info.candidateCount || '—';
+        const video = document.getElementById('dbg-video');
+        const overlay = document.getElementById('dbg-overlay');
+
+        if (overlay && video && video.videoWidth) {
+            overlay.width  = overlay.offsetWidth  || video.offsetWidth;
+            overlay.height = overlay.offsetHeight || video.offsetHeight;
+            const ctx = overlay.getContext('2d');
+            ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+            if (info.quad) {
+                const sx = overlay.width  / video.videoWidth;
+                const sy = overlay.height / video.videoHeight;
+                const pts = [info.quad.TL, info.quad.TR, info.quad.BR, info.quad.BL].map(p => ({
+                    x: p.x * sx, y: p.y * sy
+                }));
+
+                ctx.fillStyle = 'rgba(34,211,165,0.12)';
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                pts.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+                ctx.closePath();
+                ctx.fill();
+
+                ctx.strokeStyle = '#22d3a5';
+                ctx.lineWidth   = 2;
+                ctx.stroke();
+
+                pts.forEach((p, idx) => {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+                    ctx.fillStyle = idx === 0 ? '#f472b6' : '#22d3a5'; // TL in pink
+                    ctx.fill();
+                });
+            }
+        }
+
+        el('dbg-v-markers').textContent = info.screenFound ? 'Locked (4/4)' : 'Searching…';
+        el('dbg-v-candidates').textContent = `${info.candidateCount || 0} candidates  |  ${info.fps || 0} fps`;
+
         if (info.clockState !== undefined) {
-            el('dbg-v-clock').textContent = `${info.clockState}  luma=${info.luma}  mid=${info.midLuma}`;
+            el('dbg-v-clock').textContent = `${info.clockState === 'B' ? 'BLACK' : 'WHITE'} (luma=${info.luma}, mid=${info.midLuma})`;
         }
+
         if (info.cellColors !== undefined) {
-            el('dbg-v-cells').textContent = info.cellColors.join(' ');
+            const COLOR_BITS = ['00', '01', '10', '11'];
+            const COLOR_HEX  = ['#FFFFFF', '#FF2222', '#22DD22', '#2266FF'];
+            const POS_NAMES  = ['TL', 'TR', 'BL', 'BR'];
+
+            let bits8 = '';
+            info.cellColors.forEach((cName, i) => {
+                const cIdx = ['WHITE', 'RED', 'GREEN', 'BLUE'].indexOf(cName);
+                const idx = cIdx >= 0 ? cIdx : 0;
+                const bits = COLOR_BITS[idx];
+                bits8 += (i > 0 ? ' ' : '') + bits;
+
+                const colEl = document.getElementById(`dbg-swatch-color-${i}`);
+                const lblEl = document.getElementById(`dbg-swatch-name-${i}`);
+                const bitEl = document.getElementById(`dbg-swatch-bits-${i}`);
+                if (colEl) colEl.style.backgroundColor = COLOR_HEX[idx];
+                if (lblEl) lblEl.textContent = `${POS_NAMES[i]}: ${cName}`;
+                if (bitEl) bitEl.textContent = bits;
+            });
+
+            const symEl = document.getElementById('dbg-v-symbol-bits');
+            if (symEl) symEl.textContent = bits8;
         }
+
         if (info.cellRgb !== undefined) {
             el('dbg-v-rgb').textContent = info.cellRgb.join(' ');
         }
