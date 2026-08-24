@@ -626,15 +626,15 @@
     function initDebugLab() {
         document.getElementById('btn-dbg-ready').onclick = () => {
             AudioTX.playTone('READY');
-            log('debug-log', 'Playing READY (440+554 Hz, 800 ms)');
+            log('debug-log', 'Playing READY (1150+1450 Hz, 450 ms)');
         };
         document.getElementById('btn-dbg-ack').onclick = () => {
             AudioTX.playTone('ACK');
-            log('debug-log', 'Playing ACK (1760+2217 Hz, 350 ms)');
+            log('debug-log', 'Playing ACK (1750+2150 Hz, 350 ms)');
         };
         document.getElementById('btn-dbg-nack').onclick = () => {
             AudioTX.playTone('NACK');
-            log('debug-log', 'Playing NACK (220+277 Hz, 1000 ms)');
+            log('debug-log', 'Playing NACK (2550+2950 Hz, 450 ms)');
         };
 
         const btnStart = document.getElementById('btn-dbg-listen-start');
@@ -652,7 +652,7 @@
                 const lines = [];
                 for (const [name, data] of Object.entries(info)) {
                     const passStr = data.pass ? 'PASS' : '----';
-                    lines.push(`${name.padEnd(6)} peaks=[${data.peaks.join(', ')}] dB  noise=${data.noise} dB  ${passStr}`);
+                    lines.push(`${name.padEnd(6)} peaks=[${data.peaks.join(', ')}] dB  prom=[${data.prominences.join(', ')}] dB  twist=${data.twist} dB  ${passStr}`);
                 }
                 el.textContent = lines.join('\n');
             };

@@ -1,29 +1,20 @@
 'use strict';
 // ─────────────────────────────────────────────────────────────────────────────
-// AUDIO TX  —  Web Audio API tone generation
+// AUDIO TX  —  Web Audio API dual-tone chord generator
 //
-// Tones are multi-tone chords for maximum distinguishability:
-//   READY:  520 + 660 Hz, 800 ms — warm "ding-dong"
-//   ACK:   2150 + 2650 Hz, 350 ms — bright short chirp
-//   NACK:   300 + 380 Hz, 1000 ms — low rumble
+// Frequencies are matched to AudioRX:
+//   READY:  1150 + 1450 Hz, 450 ms
+//   ACK:    1750 + 2150 Hz, 350 ms
+//   NACK:   2550 + 2950 Hz, 450 ms
 //
-// IMPORTANT — these frequencies were chosen to avoid harmonic overlap.
-// The ORIGINAL set (440/554, 1760/2217, 220/277) were literally the same
-// two musical notes three octaves apart (A3/C#4, A4/C#5, A6/C#7). Real
-// speakers are non-linear and always emit some energy at 2×, 3×, 4× the
-// fundamental they're asked to play. Because of the octave relationship,
-// NACK's 2nd harmonic (440/554) landed exactly on READY's tone, and
-// READY's 4th harmonic (1760/2216) landed almost exactly on ACK's tone.
-// That's why tones could appear to be "heard" even when not played. The
-// frequencies below are spaced so that no low-order harmonic (up to 4×)
-// of one tone's frequencies falls within the detector's ±40 Hz band of
-// another tone's frequencies.
+// These frequencies sit above human voice fundamentals and room rumble
+// without harmonic collisions, and provide crisp dual-tone acoustic signaling.
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
     const TONE_SPECS = Object.freeze({
-        READY: { freqs: [520, 660],   dur: 0.80 },
-        ACK:   { freqs: [2150, 2650], dur: 0.35 },
-        NACK:  { freqs: [300, 380],   dur: 1.00 },
+        READY: { freqs: [1150, 1450], dur: 0.45 },
+        ACK:   { freqs: [1750, 2150], dur: 0.35 },
+        NACK:  { freqs: [2550, 2950], dur: 0.45 },
     });
     let _ctx = null;
 
@@ -45,24 +36,20 @@
 
         return new Promise(resolve => {
             const t0 = ctx.currentTime;
-            const ATTACK  = 0.01;                    // 10ms fade-in
-            const RELEASE = Math.min(0.05, spec.dur * 0.2); // fade-out, capped
+            const ATTACK  = 0.015;                          // 15ms fade-in
+            const RELEASE = Math.min(0.04, spec.dur * 0.15); // 40ms fade-out
             let ended = 0;
+
             for (const hz of spec.freqs) {
                 const osc  = ctx.createOscillator();
                 const gain = ctx.createGain();
                 osc.type = 'sine';
                 osc.frequency.value = hz;
 
-                // Ramped attack/release instead of a hard step. A hard
-                // on/off step is a broadband click (energy smeared across
-                // the whole spectrum) which can spuriously nudge OTHER
-                // tones' frequency bands above threshold, especially on
-                // cheap/small speakers. A short linear ramp keeps the
-                // energy concentrated at the intended frequency.
+                // Smooth linear attack and release to eliminate broadband switching clicks
                 gain.gain.setValueAtTime(0.0001, t0);
-                gain.gain.linearRampToValueAtTime(0.55, t0 + ATTACK);
-                gain.gain.setValueAtTime(0.55, t0 + spec.dur - RELEASE);
+                gain.gain.linearRampToValueAtTime(0.50, t0 + ATTACK);
+                gain.gain.setValueAtTime(0.50, t0 + spec.dur - RELEASE);
                 gain.gain.linearRampToValueAtTime(0.0001, t0 + spec.dur);
 
                 osc.connect(gain);

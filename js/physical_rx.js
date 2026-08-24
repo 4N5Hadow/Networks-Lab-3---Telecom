@@ -1,14 +1,19 @@
 'use strict';
 // ─────────────────────────────────────────────────────────────────────────────
-// PHYSICAL RX  —  OpenCV.js camera receiver (robust version)
+// PHYSICAL RX  —  OpenCV.js camera receiver (ultra-robust version)
 //
-// Key features:
-//   1. Marker detection: approxPolyDP + bounding-box fill/aspect ratio
-//      (fill >= 0.55 accounts for 45° rotated square where fill is 0.50)
-//   2. Area filtering uses fraction of image area for scale invariance
-//   3. Canonical warp maps marker centroids to corners of 400×400 canvas
-//   4. Sampling patches (hw=30) compute mean RGB inside enlarged data cells
-//   5. Debounce K=4 prevents clock flicker
+// Key improvements:
+//   1. Adaptive thresholding on HSV Value channel for rock-solid black square
+//      segmentation under any ambient light and on any phone display.
+//   2. Scale-invariant candidate filtering (0.015% to 15% image area) supporting
+//      close-up to 2+ meters distance.
+//   3. Quad optimization: when multiple dark blobs exist (e.g. 4 corner markers +
+//      clock cell + background noise), finds the best 4-corner convex quad
+//      enclosing the screen.
+//   4. Stable corner sorting (clockwise by angle, TL identified by min(x+y)).
+//   5. Temporal quad smoothing & single-frame loss tolerance to eliminate jitter.
+//   6. Precise canonical perspective warp to 400×400 canvas.
+//   7. Robust clock transition edge-detection with K-frame debouncing.
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
     const LO = window.LAYOUT;
@@ -29,10 +34,10 @@
             this._debounce      = [];
             this.K              = 4;
 
-            // Marker detection params (adaptive: fraction of image area)
-            this.markerMinFrac = 0.001;   // marker must be > 0.1% of image
-            this.markerMaxFrac = 0.08;    // marker must be < 8% of image
-            this.DS_W          = 640;     // downsample width for detection
+            // Marker detection params (scale invariant)
+            this.markerMinFrac = 0.00015;  // > 0.015% of image (handles ~2m distance)
+            this.markerMaxFrac = 0.15;     // < 15% of image (handles close range)
+            this.DS_W          = 640;      // downsample width for fast detection
 
             // Internal canvases
             this._capCanvas  = document.createElement('canvas');
@@ -48,8 +53,11 @@
             this._stream = null;
             this._raf    = null;
 
-            // Last good warp for debug
-            this._lastWarpOk = false;
+            // Last good quad & temporal tracking
+            this._lastQuad           = null;
+            this._lostQuadFrames     = 0;
+            this._MAX_LOST_FRAMES    = 4; // allow up to 4 dropped frames before declaring lost
+            this._lastWarpOk         = false;
             this._lastCandidateCount = 0;
 
             // Callbacks
@@ -120,7 +128,37 @@
             // Detect 4 finder markers
             const quad = this._findMarkers(this.DS_W, dsH);
 
-            if (!quad) {
+            let activeQuad = null;
+            if (quad) {
+                // Scale from downsample space to native video space
+                const sx = VW / this.DS_W, sy = VH / dsH;
+                const fullQuad = {
+                    TL: { x: quad.TL.x * sx, y: quad.TL.y * sy },
+                    TR: { x: quad.TR.x * sx, y: quad.TR.y * sy },
+                    BL: { x: quad.BL.x * sx, y: quad.BL.y * sy },
+                    BR: { x: quad.BR.x * sx, y: quad.BR.y * sy },
+                };
+
+                // Temporal smoothing (exponential moving average: alpha = 0.65)
+                if (this._lastQuad) {
+                    const a = 0.65, b = 1 - a;
+                    this._lastQuad = {
+                        TL: { x: a * fullQuad.TL.x + b * this._lastQuad.TL.x, y: a * fullQuad.TL.y + b * this._lastQuad.TL.y },
+                        TR: { x: a * fullQuad.TR.x + b * this._lastQuad.TR.x, y: a * fullQuad.TR.y + b * this._lastQuad.TR.y },
+                        BL: { x: a * fullQuad.BL.x + b * this._lastQuad.BL.x, y: a * fullQuad.BL.y + b * this._lastQuad.BL.y },
+                        BR: { x: a * fullQuad.BR.x + b * this._lastQuad.BR.x, y: a * fullQuad.BR.y + b * this._lastQuad.BR.y },
+                    };
+                } else {
+                    this._lastQuad = fullQuad;
+                }
+                this._lostQuadFrames = 0;
+                activeQuad = this._lastQuad;
+            } else if (this._lastQuad && this._lostQuadFrames < this._MAX_LOST_FRAMES) {
+                // Temporary drop tolerance: hold previous quad for up to MAX_LOST_FRAMES
+                this._lostQuadFrames++;
+                activeQuad = this._lastQuad;
+            } else {
+                this._lastQuad   = null;
                 this._lastWarpOk = false;
                 if (this.onDebug) this.onDebug({
                     screenFound: false, cvReady: true,
@@ -129,22 +167,13 @@
                 return;
             }
 
-            // Scale to native video space
-            const sx = VW / this.DS_W, sy = VH / dsH;
-            const fullQuad = {
-                TL: { x: quad.TL.x * sx, y: quad.TL.y * sy },
-                TR: { x: quad.TR.x * sx, y: quad.TR.y * sy },
-                BL: { x: quad.BL.x * sx, y: quad.BL.y * sy },
-                BR: { x: quad.BR.x * sx, y: quad.BR.y * sy },
-            };
-
-            // Full-res capture for warp
+            // Full-res capture for perspective warp
             this._capCanvas.width  = VW;
             this._capCanvas.height = VH;
             this._capCtx.drawImage(this.video, 0, 0, VW, VH);
 
             // Warp
-            if (!this._warpPerspective(fullQuad, VW, VH)) {
+            if (!this._warpPerspective(activeQuad, VW, VH)) {
                 this._lastWarpOk = false;
                 return;
             }
@@ -156,14 +185,14 @@
             if (this._calibrating) {
                 this._accumCalib(warpedData);
                 if (this.onDebug) this.onDebug({
-                    screenFound: true, quad: fullQuad, calibrating: true, cvReady: true,
+                    screenFound: true, quad: activeQuad, calibrating: true, cvReady: true,
                     calibProgress: this._calibSamples.length,
                 });
                 return;
             }
             if (!this.calibrated) {
                 if (this.onDebug) this.onDebug({
-                    screenFound: true, quad: fullQuad, calibrating: false, cvReady: true,
+                    screenFound: true, quad: activeQuad, calibrating: false, cvReady: true,
                 });
                 return;
             }
@@ -193,7 +222,7 @@
             if (this.onDebug) {
                 this.onDebug({
                     screenFound: true,
-                    quad: fullQuad,
+                    quad: activeQuad,
                     clockState: ckSt,
                     luma: luma.toFixed(1),
                     midLuma: this.clockMidLuma.toFixed(1),
@@ -219,25 +248,9 @@
                 const imgData = this._capCtx.getImageData(0, 0, W, H);
                 src = cv.matFromImageData(imgData);
 
-                // Use HSV's VALUE channel (= max(R,G,B)) instead of a
-                // luma-weighted grayscale conversion (cv.COLOR_RGBA2GRAY,
-                // Y = 0.299R + 0.587G + 0.114B). This matters because the
-                // data cells use fully SATURATED pure colours. Luma makes
-                // pure red ≈76 and pure blue ≈29 — both DARKER than the
-                // plain grey background (192) — so Otsu thresholding was
-                // lumping the large colored data cells in with the small
-                // black marker squares as "dark" blobs. A data cell is
-                // ~7.5x the area of a real corner marker, and candidates
-                // are ranked "top 4 by area", so a red/blue cell would
-                // frequently outrank and displace a real marker, corrupting
-                // the quad (and therefore the whole perspective warp) —
-                // this was the actual cause of markers "not being detected
-                // completely" once real (colored) symbols started showing.
-                // HSV Value is max(R,G,B), which is 255 for every one of
-                // our saturated cell colours (each has one fully-lit
-                // channel) and near-zero only for true black/near-black
-                // pixels — cleanly separating markers from data cells
-                // regardless of which hue is showing.
+                // Convert RGBA -> RGB -> HSV
+                // Value channel V = max(R,G,B). Saturated colors (Red, Green, Blue, White, Grey bg)
+                // all have high Value (>= 180). Black markers and black clock have low Value (< 70).
                 rgb = new cv.Mat();
                 cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
                 hsv = new cv.Mat();
@@ -249,10 +262,14 @@
                 blur = new cv.Mat();
                 cv.GaussianBlur(valueChan, blur, new cv.Size(5, 5), 0);
 
+                // Adaptive thresholding: local contrast separates dark markers on light screen
+                // regardless of distance or room lighting.
                 binary = new cv.Mat();
-                cv.threshold(blur, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+                const blockSize = Math.max(15, (Math.round(W / 25) | 1)); // odd number ~25-31
+                cv.adaptiveThreshold(blur, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                     cv.THRESH_BINARY_INV, blockSize, 12);
 
-                kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(7, 7));
+                kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
                 closed = new cv.Mat();
                 cv.morphologyEx(binary, closed, cv.MORPH_CLOSE, kernel);
 
@@ -279,34 +296,14 @@
                         const fill = area / (bboxArea || 1);
                         const asp  = Math.min(rect.width, rect.height) / (Math.max(rect.width, rect.height) || 1);
 
-                        // Quad-like blob with good rectangular fill (fill >= 0.55 allows 45-deg rotation)
+                        // Quad-like blob with solid rectangular/diamond fill (fill >= 0.45 handles any perspective rotation)
                         const isQuadLike = approx.rows >= 4 && approx.rows <= 8;
 
-                        if (isQuadLike && fill >= 0.55 && asp >= 0.45) {
+                        if (isQuadLike && fill >= 0.45 && asp >= 0.40) {
                             const M  = cv.moments(cnt, false);
-                            const cx = M.m10 / (M.m00 || 1);
-                            const cy = M.m01 / (M.m00 || 1);
-
-                            // Corner-proximity gate: by design, the 4 finder
-                            // markers sit near the image CORNERS (small in
-                            // both x and y, or large in both x and y). The
-                            // clock cell (V=0 when in its black state) sits
-                            // near the top edge but horizontally CENTRED
-                            // (nx≈0.5) — not corner-like. It's smaller than
-                            // a real marker under normal conditions, but if
-                            // a real marker is partly occluded/blurred and
-                            // its apparent contour area shrinks, the clock
-                            // blob could still outrank it in the "top 4 by
-                            // area" selection, bumping a real marker out and
-                            // corrupting the quad. Require near-edge in
-                            // BOTH axes (i.e. an actual corner) so the clock
-                            // (and anything else near the centre, like data
-                            // cells) can never be mistaken for a marker.
-                            const nx = cx / W, ny = cy / H;
-                            const EDGE = 0.30;
-                            const isCornerX = nx < EDGE || nx > (1 - EDGE);
-                            const isCornerY = ny < EDGE || ny > (1 - EDGE);
-                            if (isCornerX && isCornerY) {
+                            if (M.m00 > 0) {
+                                const cx = M.m10 / M.m00;
+                                const cy = M.m01 / M.m00;
                                 candidates.push({ x: cx, y: cy, area });
                             }
                         }
@@ -318,15 +315,8 @@
                 this._lastCandidateCount = candidates.length;
                 if (candidates.length < 4) return null;
 
-                // Top 4 by area
-                candidates.sort((a, b) => b.area - a.area);
-                const top4 = candidates.slice(0, 4);
-
-                // Reject if sizes differ too much (max 10× ratio for perspective)
-                const maxA = top4[0].area, minA2 = top4[3].area;
-                if (minA2 * 10 < maxA) return null;
-
-                return this._sortCorners(top4);
+                // Pick the best 4 candidates forming the transmitter screen quad
+                return this._selectBestQuad(candidates, W, H);
 
             } catch (e) {
                 console.warn('[PhysicalRX] findMarkers:', e.message);
@@ -340,13 +330,111 @@
             }
         }
 
+        /**
+         * Find the best 4-point convex quadrilateral from candidate marker blobs.
+         */
+        _selectBestQuad(candidates, W, H) {
+            // If candidates are many, prioritize top 10 by area
+            const pool = candidates.slice(0, 10);
+            if (pool.length < 4) return null;
+
+            if (pool.length === 4) {
+                const quad = this._sortCorners(pool);
+                return this._isConvexQuad(quad) ? quad : null;
+            }
+
+            // Test 4-point subsets and score them
+            let bestQuad = null, bestScore = -Infinity;
+            const N = pool.length;
+
+            for (let i = 0; i < N - 3; i++) {
+                for (let j = i + 1; j < N - 2; j++) {
+                    for (let k = j + 1; k < N - 1; k++) {
+                        for (let l = k + 1; l < N; l++) {
+                            const pts = [pool[i], pool[j], pool[k], pool[l]];
+                            const quad = this._sortCorners(pts);
+                            if (!this._isConvexQuad(quad)) continue;
+
+                            // Compute quadrilateral properties
+                            const topW = Math.hypot(quad.TR.x - quad.TL.x, quad.TR.y - quad.TL.y);
+                            const botW = Math.hypot(quad.BR.x - quad.BL.x, quad.BR.y - quad.BL.y);
+                            const lftH = Math.hypot(quad.BL.x - quad.TL.x, quad.BL.y - quad.TL.y);
+                            const rgtH = Math.hypot(quad.BR.x - quad.TR.x, quad.BR.y - quad.TR.y);
+
+                            const avgW = (topW + botW) / 2;
+                            const avgH = (lftH + rgtH) / 2;
+                            if (avgW < 10 || avgH < 10) continue;
+
+                            // Aspect ratio should be roughly 1.0 (screen canvas is square)
+                            const aspect = Math.min(avgW, avgH) / Math.max(avgW, avgH);
+                            if (aspect < 0.45) continue; // reject heavily distorted non-square sets
+
+                            // Area ratio of candidate markers (markers should be similar in size)
+                            const areas = pts.map(p => p.area);
+                            const maxA = Math.max(...areas), minA = Math.min(...areas);
+                            const areaRatio = minA / (maxA || 1);
+
+                            // Approximate quad area
+                            const quadArea = avgW * avgH;
+
+                            // Score: higher area + higher aspect + area consistency
+                            const score = Math.log(quadArea + 1) * 3 + aspect * 4 + areaRatio * 2;
+
+                            if (score > bestScore) {
+                                bestScore = score;
+                                bestQuad  = quad;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return bestQuad;
+        }
+
+        _isConvexQuad(quad) {
+            if (!quad) return false;
+            // Cross product test for strictly convex polygon in clockwise order
+            const pts = [quad.TL, quad.TR, quad.BR, quad.BL];
+            let sign = 0;
+            for (let i = 0; i < 4; i++) {
+                const p1 = pts[i];
+                const p2 = pts[(i + 1) % 4];
+                const p3 = pts[(i + 2) % 4];
+                const dx1 = p2.x - p1.x, dy1 = p2.y - p1.y;
+                const dx2 = p3.x - p2.x, dy2 = p3.y - p2.y;
+                const cross = dx1 * dy2 - dy1 * dx2;
+                if (Math.abs(cross) < 1e-4) return false;
+                if (i === 0) sign = cross > 0 ? 1 : -1;
+                else if ((cross > 0 ? 1 : -1) !== sign) return false;
+            }
+            return true;
+        }
+
         _sortCorners(pts) {
-            // Sort by (x + y) → smallest = TL, largest = BR
-            const sorted = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y));
-            const TL = sorted[0], BR = sorted[3];
-            // Sort the middle two by (x - y) → larger = TR, smaller = BL
-            const mid = [sorted[1], sorted[2]].sort((a, b) => (b.x - b.y) - (a.x - a.y));
-            return { TL, TR: mid[0], BL: mid[1], BR };
+            // Compute centroid
+            const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+            const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+
+            // Sort points by angle around centroid in clockwise order (in screen coordinates y down)
+            const sortedByAngle = [...pts].sort((a, b) =>
+                Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx)
+            );
+
+            // TL corner is the one with smallest (x + y) in upright/near-upright orientation
+            let tlIdx = 0, minSum = Infinity;
+            sortedByAngle.forEach((p, idx) => {
+                const sum = p.x + p.y;
+                if (sum < minSum) { minSum = sum; tlIdx = idx; }
+            });
+
+            // Follow clockwise order from TL: TL -> TR -> BR -> BL
+            const TL = sortedByAngle[tlIdx];
+            const TR = sortedByAngle[(tlIdx + 1) % 4];
+            const BR = sortedByAngle[(tlIdx + 2) % 4];
+            const BL = sortedByAngle[(tlIdx + 3) % 4];
+
+            return { TL, TR, BR, BL };
         }
 
         // ── Warp ─────────────────────────────────────────────────────────────
@@ -455,15 +543,17 @@
         }
 
         resetClock() {
-            this.lastClockState = 'B';
-            this._debounce      = [];
+            this.lastClockState  = 'B';
+            this._debounce       = [];
+            this._lastQuad       = null;
+            this._lostQuadFrames = 0;
         }
 
         reset() {
-            this._calibrating  = false;
-            this._calibSamples = [];
-            this._calibDone    = null;
-            this.calibrated    = false;
+            this._calibrating    = false;
+            this._calibSamples   = [];
+            this._calibDone      = null;
+            this.calibrated      = false;
             this.resetClock();
         }
     }

@@ -1,32 +1,31 @@
 'use strict';
 // ─────────────────────────────────────────────────────────────────────────────
-// AUDIO RX  —  Chord-based tone detection via FFT
+// AUDIO RX  —  Ultra-robust Dual-Tone Chord Detection via FFT
 //
-// Each tone is a TWO-frequency chord. Detection requires BOTH frequencies
-// to be above threshold simultaneously, which dramatically reduces false
-// positives from ambient noise or harmonics.
-//
-// Detection parameters:
-//   fftSize     = 8192  (~5.4 Hz/bin at 44.1 kHz)
-//   bandHz      = 40    (±40 Hz detection window per frequency)
-//   threshold   = -45 dBFS absolute
-//   snrDb       = 12 dB above noise floor per frequency
-//   cooldown    = 600 ms
-//   debounce    = 2 consecutive polls (~120ms) must agree before firing
+// Noise-rejection strategy:
+//   1. Local Spectral Prominence: Measures the contrast between the target
+//      frequency peak and its immediate adjacent guard bands (±45..150 Hz).
+//      Broadband noise (speech, typing, coughing, room noise) elevates the
+//      entire band together, yielding near-zero prominence (< 5 dB).
+//      Pure sine tones produce a sharp, high prominence (>= 12 dB).
+//   2. Dual-Tone Co-occurrence: BOTH frequencies in the chord must simultaneously
+//      exceed the absolute threshold and local prominence.
+//   3. Twist / Balance Check: Both tone components must have comparable energy
+//      (|P1 - P2| <= 9 dB).
+//   4. Multi-poll Debouncing: Requires 4 consecutive agreeing polls (~160ms) of
+//      sustained tone before firing, filtering out transient clicks and speech.
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
-    // Must match AudioTX.TONE_SPECS. Frequencies were changed from the
-    // original 440/554, 1760/2217, 220/277 because those were literally
-    // the same two notes 3 octaves apart — speaker harmonic distortion
-    // made NACK's 2nd harmonic land on READY, and READY's 4th harmonic
-    // land on ACK, causing phantom detections. See audio_tx.js for detail.
     const CHORD_TONES = Object.freeze([
-        { name: 'READY', freqs: [520, 660]   },
-        { name: 'ACK',   freqs: [2150, 2650] },
-        { name: 'NACK',  freqs: [300, 380]   },
+        { name: 'READY', freqs: [1150, 1450] },
+        { name: 'ACK',   freqs: [1750, 2150] },
+        { name: 'NACK',  freqs: [2550, 2950] },
     ]);
-    const BAND_HZ = 40;
-    const DEBOUNCE_POLLS = 2; // require this many consecutive polls agreeing
+
+    const TARGET_BAND_HZ = 25;   // ±25 Hz around target frequency
+    const GUARD_MIN_HZ   = 45;   // guard band starts 45 Hz away from target
+    const GUARD_MAX_HZ   = 150;  // guard band extends to 150 Hz away
+    const DEBOUNCE_POLLS = 4;    // 4 consecutive polls (~160ms) required
 
     class AudioRX {
         constructor() {
@@ -34,18 +33,22 @@
             this._analyser = null;
             this._stream   = null;
             this.running   = false;
-            this.threshold = -45;   // dBFS
-            this.snrDb     = 12;    // dB above noise floor
-            this.cooldown  = 600;   // ms
-            this._lastFire = 0;
-            this._timer    = null;
-            this._pendingTone  = null;  // tone currently accumulating debounce
+
+            // Tuning parameters
+            this.threshold       = -46;  // dBFS absolute minimum peak power
+            this.minProminenceDb = 12;   // dB above immediate local guard bands
+            this.maxTwistDb      = 9;    // max allowable power difference between chord freqs
+            this.cooldown        = 500;  // ms between valid tone triggers
+
+            this._lastFire     = 0;
+            this._timer        = null;
+            this._pendingTone  = null;
             this._pendingCount = 0;
+
             /** @type {((name: string) => void)|null} */
-            this.onTone    = null;
-            /** @type {((info: object) => void)|null}
-             *  Debug callback, fired every poll with per-tone energy info */
-            this.onDebugPoll = null;
+            this.onTone        = null;
+            /** @type {((info: object) => void)|null} */
+            this.onDebugPoll   = null;
         }
 
         async start() {
@@ -71,10 +74,10 @@
                 const src      = this._ctx.createMediaStreamSource(this._stream);
                 this._analyser = this._ctx.createAnalyser();
                 this._analyser.fftSize = 8192;
-                this._analyser.smoothingTimeConstant = 0.4;
+                this._analyser.smoothingTimeConstant = 0.35;
                 src.connect(this._analyser);
                 this.running = true;
-                this._timer  = setInterval(() => this._poll(), 60);
+                this._timer  = setInterval(() => this._poll(), 40);
                 return true;
             } catch (e) {
                 console.warn('[AudioRX] start failed:', e.message);
@@ -98,62 +101,79 @@
             const sr       = this._ctx.sampleRate;
             const fftSz    = this._analyser.fftSize;
             const hzPerBin = sr / fftSz;
-            const bandBins = Math.ceil(BAND_HZ / hzPerBin);
 
-            // Noise floor: average over spectrum
-            let noiseSum = 0;
-            for (let i = 0; i < binCount; i++) noiseSum += buf[i];
-            const noiseFloor = noiseSum / binCount;
+            const targetBins = Math.max(1, Math.ceil(TARGET_BAND_HZ / hzPerBin));
+            const guardMinB  = Math.max(1, Math.ceil(GUARD_MIN_HZ / hzPerBin));
+            const guardMaxB  = Math.max(2, Math.ceil(GUARD_MAX_HZ / hzPerBin));
 
             const debugInfo = {};
-            let bestName = null, bestMargin = -Infinity;
+            let bestName = null, bestScore = -Infinity;
 
-            // Evaluate ALL tones every poll (instead of stopping at the
-            // first pass). If more than one tone's band happens to pass in
-            // the same poll — e.g. from a harmonic or transient — we pick
-            // the one with the strongest SNR margin rather than whichever
-            // happened to be listed first in CHORD_TONES.
             for (const { name, freqs } of CHORD_TONES) {
                 let allPass = true;
-                let minMargin = Infinity;
                 const peaks = [];
+                const prominences = [];
 
                 for (const hz of freqs) {
-                    const c  = Math.round(hz / hzPerBin);
-                    const lo = Math.max(0, c - bandBins);
-                    const hi = Math.min(binCount - 1, c + bandBins);
+                    const c = Math.round(hz / hzPerBin);
 
+                    // Peak inside target window
+                    const tLo = Math.max(0, c - targetBins);
+                    const tHi = Math.min(binCount - 1, c + targetBins);
                     let peak = -300;
-                    for (let b = lo; b <= hi; b++) {
+                    for (let b = tLo; b <= tHi; b++) {
                         if (buf[b] > peak) peak = buf[b];
                     }
                     peaks.push(peak);
 
-                    const margin = peak - noiseFloor;
-                    if (peak < this.threshold || margin < this.snrDb) allPass = false;
-                    if (margin < minMargin) minMargin = margin;
+                    // Local noise floor from adjacent guard bands (excluding target window)
+                    let guardSum = 0, guardCount = 0;
+                    // Lower guard band
+                    const gLo1 = Math.max(0, c - guardMaxB);
+                    const gHi1 = Math.max(0, c - guardMinB);
+                    for (let b = gLo1; b <= gHi1; b++) { guardSum += buf[b]; guardCount++; }
+
+                    // Upper guard band
+                    const gLo2 = Math.min(binCount - 1, c + guardMinB);
+                    const gHi2 = Math.min(binCount - 1, c + guardMaxB);
+                    for (let b = gLo2; b <= gHi2; b++) { guardSum += buf[b]; guardCount++; }
+
+                    const localNoise = guardCount > 0 ? (guardSum / guardCount) : -100;
+                    const prominence = peak - localNoise;
+                    prominences.push(prominence);
+
+                    // Check criteria per frequency
+                    if (peak < this.threshold || prominence < this.minProminenceDb) {
+                        allPass = false;
+                    }
                 }
 
+                // Check twist / power balance between the two chord frequencies
+                const twist = Math.abs(peaks[0] - peaks[1]);
+                if (twist > this.maxTwistDb) {
+                    allPass = false;
+                }
+
+                const minProm = Math.min(...prominences);
+                const avgPeak = (peaks[0] + peaks[1]) / 2;
+                const score   = minProm + (avgPeak / 10);
+
                 debugInfo[name] = {
-                    peaks: peaks.map(p => p.toFixed(1)),
-                    noise: noiseFloor.toFixed(1),
-                    pass: allPass,
+                    peaks:       peaks.map(p => p.toFixed(1)),
+                    prominences: prominences.map(pr => pr.toFixed(1)),
+                    twist:       twist.toFixed(1),
+                    pass:        allPass,
                 };
 
-                if (allPass && minMargin > bestMargin) {
-                    bestMargin = minMargin;
-                    bestName   = name;
+                if (allPass && score > bestScore) {
+                    bestScore = score;
+                    bestName  = name;
                 }
             }
 
             if (this.onDebugPoll) this.onDebugPoll(debugInfo);
 
-            // Temporal debounce: a single noisy poll (transient click,
-            // harmonic spike, ambient sound) shouldn't be enough to fire a
-            // detection. Require the SAME best tone to win on
-            // DEBOUNCE_POLLS consecutive polls (~120ms at the 60ms poll
-            // interval) before accepting it. A real tone is held for
-            // 350-1000ms so this costs negligible latency.
+            // Multi-poll temporal debouncing
             if (bestName && bestName === this._pendingTone) {
                 this._pendingCount++;
             } else {
