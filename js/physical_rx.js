@@ -38,15 +38,15 @@
             // transmitter canvas, so a much tighter area range is safer than
             // accepting arbitrary dark blobs. The lower bound still permits
             // fairly distant/oblique screens.
-            this.markerMinFrac = 0.0005;   // 0.05% of image
-            this.markerMaxFrac = 0.03;     // 3% of image
-            this.markerMinAreaRatio = 0.50;
-            this.DS_W          = 640;      // downsample width for fast detection
+            this.markerMinFrac = 0.00001;   // 0.05% of image
+            this.markerMaxFrac = 0.08;     // 3% of image
+            this.markerMinAreaRatio = 0.25;
+            this.DS_W          = 960;      // downsample width for fast detection
 
             // OpenCV is considerably more expensive than the browser render
             // loop. Detection at ~12.5 Hz is sufficient and also makes the
             // temporal tracker more useful.
-            this.DETECT_INTERVAL_MS = 80;
+            this.DETECT_INTERVAL_MS = 100;
             this._lastDetectTime = 0;
 
             // Internal canvases
@@ -276,41 +276,34 @@
                 cv.split(hsv, hsvChannels);
                 valueChan = hsvChannels.get(2);
 
-                blur = new cv.Mat();
-                cv.GaussianBlur(valueChan, blur, new cv.Size(5, 5), 0);
-
-                // Absolute black mask. 95 leaves room for camera noise while
-                // remaining well below the grey background (~192) and colours.
+                // IMPORTANT: do not blur/morphologically open the image before
+                // finding markers. At distance the 8% marker can become only a
+                // handful of pixels wide, and a 3x3 opening can erase it.
+                // The TX marker is pure black on a grey background, so a direct
+                // V-channel threshold is the strongest detector.
+                const threshold = 115;
                 darkMask = new cv.Mat();
-                const low = new cv.Mat(blur.rows, blur.cols, blur.type(), new cv.Scalar(0));
-                const high = new cv.Mat(blur.rows, blur.cols, blur.type(), new cv.Scalar(95));
-                cv.inRange(blur, low, high, darkMask);
+                const low = new cv.Mat(valueChan.rows, valueChan.cols, valueChan.type(), new cv.Scalar(0));
+                const high = new cv.Mat(valueChan.rows, valueChan.cols, valueChan.type(), new cv.Scalar(threshold));
+                cv.inRange(valueChan, low, high, darkMask);
                 low.delete();
                 high.delete();
 
-                // Keep adaptive threshold as a fallback for unusual exposure.
+                // Adaptive threshold is retained only as a fallback when the
+                // direct dark mask finds too little content.
                 adaptive = new cv.Mat();
                 const blockSize = Math.max(15, (Math.round(W / 25) | 1));
-                cv.adaptiveThreshold(blur, adaptive, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                     cv.THRESH_BINARY_INV, blockSize, 12);
+                cv.adaptiveThreshold(valueChan, adaptive, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                     cv.THRESH_BINARY_INV, blockSize, 10);
 
-                // A small amount of morphology removes isolated camera noise.
-                kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-                closed = new cv.Mat();
-                cv.morphologyEx(darkMask, closed, cv.MORPH_CLOSE, kernel);
-                cv.morphologyEx(closed, closed, cv.MORPH_OPEN, kernel);
-
-                // If the absolute mask is nearly empty, use adaptive threshold.
-                // Otherwise stay conservative: combining the two masks would
-                // re-introduce many of the false contours we are trying to avoid.
-                const darkPixels = cv.countNonZero(closed);
-                const minUsefulPixels = W * H * 0.0002;
+                const darkPixels = cv.countNonZero(darkMask);
+                const minUsefulPixels = W * H * 0.00003;
                 if (darkPixels < minUsefulPixels) {
                     binary = adaptive;
                     adaptive = null;
                 } else {
-                    binary = closed;
-                    closed = null;
+                    binary = darkMask;
+                    darkMask = null;
                 }
 
                 contours  = new cv.MatVector();
@@ -340,9 +333,9 @@
                     const fill = area / (bboxArea || 1);
                     const asp = Math.min(rect.width, rect.height) /
                                 (Math.max(rect.width, rect.height) || 1);
-                    const isQuadLike = approx.rows >= 4 && approx.rows <= 8;
+                    const isQuadLike = approx.rows >= 4 && approx.rows <= 10;
 
-                    if (isQuadLike && fill >= 0.55 && asp >= 0.45) {
+                    if (isQuadLike && fill >= 0.45 && asp >= 0.30) {
                         const M = cv.moments(cnt, false);
                         if (M.m00 > 0) {
                             candidates.push({
@@ -386,34 +379,32 @@
          * simply selecting the largest quadrilateral.
          */
         _selectBestQuad(candidates, W, H) {
-            const pool = candidates.slice(0, Math.min(candidates.length, 14));
-            if (pool.length < 4) return null;
+            if (candidates.length < 4) return null;
 
+            // Keep enough candidates for small markers, but avoid an expensive
+            // combinatorial search over every dark object in the frame.
+            const pool = candidates.slice(0, Math.min(candidates.length, 20));
             let bestQuad = null;
             let bestScore = -Infinity;
-            const N = pool.length;
 
-            for (let i = 0; i < N - 3; i++) {
-                for (let j = i + 1; j < N - 2; j++) {
-                    for (let k = j + 1; k < N - 1; k++) {
-                        for (let l = k + 1; l < N; l++) {
+            for (let i = 0; i < pool.length - 3; i++) {
+                for (let j = i + 1; j < pool.length - 2; j++) {
+                    for (let k = j + 1; k < pool.length - 1; k++) {
+                        for (let l = k + 1; l < pool.length; l++) {
                             const pts = [pool[i], pool[j], pool[k], pool[l]];
                             const quad = this._sortCorners(pts);
                             if (!this._isConvexQuad(quad)) continue;
 
                             const topW = Math.hypot(quad.TR.x - quad.TL.x, quad.TR.y - quad.TL.y);
                             const botW = Math.hypot(quad.BR.x - quad.BL.x, quad.BR.y - quad.BL.y);
-                            const lftH = Math.hypot(quad.BL.x - quad.TL.x, quad.BL.y - quad.TL.y);
-                            const rgtH = Math.hypot(quad.BR.x - quad.TR.x, quad.BR.y - quad.TR.y);
-                            const diag1 = Math.hypot(quad.BR.x - quad.TL.x, quad.BR.y - quad.TL.y);
-                            const diag2 = Math.hypot(quad.BL.x - quad.TR.x, quad.BL.y - quad.TR.y);
-
+                            const leftH = Math.hypot(quad.BL.x - quad.TL.x, quad.BL.y - quad.TL.y);
+                            const rightH = Math.hypot(quad.BR.x - quad.TR.x, quad.BR.y - quad.TR.y);
                             const avgW = (topW + botW) / 2;
-                            const avgH = (lftH + rgtH) / 2;
-                            if (avgW < W * 0.08 || avgH < H * 0.08) continue;
+                            const avgH = (leftH + rightH) / 2;
+                            if (avgW < W * 0.04 || avgH < H * 0.04) continue;
 
                             const aspect = Math.min(avgW, avgH) / Math.max(avgW, avgH);
-                            if (aspect < 0.50) continue;
+                            if (aspect < 0.35) continue;
 
                             const areas = pts.map(p => p.area);
                             const maxA = Math.max(...areas);
@@ -421,29 +412,36 @@
                             const areaRatio = minA / (maxA || 1);
                             if (areaRatio < this.markerMinAreaRatio) continue;
 
-                            // Opposite sides of a perspective-distorted square
-                            // should have similar lengths.
                             const widthConsistency = Math.min(topW, botW) / Math.max(topW, botW);
-                            const heightConsistency = Math.min(lftH, rgtH) / Math.max(lftH, rgtH);
-                            if (widthConsistency < 0.45 || heightConsistency < 0.45) continue;
+                            const heightConsistency = Math.min(leftH, rightH) / Math.max(leftH, rightH);
+                            if (widthConsistency < 0.35 || heightConsistency < 0.35) continue;
 
+                            const diag1 = Math.hypot(quad.BR.x - quad.TL.x, quad.BR.y - quad.TL.y);
+                            const diag2 = Math.hypot(quad.BL.x - quad.TR.x, quad.BL.y - quad.TR.y);
                             const diagonalConsistency = Math.min(diag1, diag2) / Math.max(diag1, diag2);
-                            if (diagonalConsistency < 0.55) continue;
+                            if (diagonalConsistency < 0.45) continue;
 
-                            // Reject extremely tiny quads: the real screen should
-                            // span a meaningful part of the camera image.
+                            // The real four markers should occupy four different
+                            // quadrants of the candidate bounding box. This rejects
+                            // four pieces of a single dark object.
+                            const cx = pts.reduce((a, p) => a + p.x, 0) / 4;
+                            const cy = pts.reduce((a, p) => a + p.y, 0) / 4;
+                            const quadrants = new Set(pts.map(p =>
+                                (p.x >= cx ? 1 : 0) + 2 * (p.y >= cy ? 1 : 0)));
+                            if (quadrants.size < 4) continue;
+
+                            // Prefer large, well-spread, similarly-sized markers.
                             const spanX = Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x));
                             const spanY = Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y));
-                            if (spanX < W * 0.12 || spanY < H * 0.12) continue;
+                            const spread = Math.min(spanX / W, spanY / H);
 
-                            const quadArea = avgW * avgH;
                             const score =
-                                Math.log(quadArea + 1) * 2.0 +
-                                aspect * 5.0 +
-                                areaRatio * 8.0 +
-                                widthConsistency * 3.0 +
-                                heightConsistency * 3.0 +
-                                diagonalConsistency * 2.0;
+                                spread * 20 +
+                                aspect * 5 +
+                                areaRatio * 10 +
+                                widthConsistency * 4 +
+                                heightConsistency * 4 +
+                                diagonalConsistency * 3;
 
                             if (score > bestScore) {
                                 bestScore = score;
@@ -453,7 +451,6 @@
                     }
                 }
             }
-
             return bestQuad;
         }
 
