@@ -30,9 +30,14 @@
             this.clockMidLuma = 128;
 
             // Clock debounce
-            this.lastClockState = 'B';
-            this._debounce      = [];
-            this.K              = 3;
+            this.lastClockState  = 'B';
+            this._debounce       = [];
+            this.K               = 5;   // frames that must all agree before symbol fires
+            this._symbolCooldown = 0;   // frames to skip after a symbol fires
+            this.COOLDOWN_FRAMES = 8;   // minimum gap between symbols
+            // "pending capture": after debounce locks, wait 1 more frame and then
+            // sample cells (so the display is fully stable at the new state)
+            this._pendingCapture = false;
 
             // Marker detection params
             this.markerMinFrac = 0.00010; // > 0.01% of image
@@ -155,9 +160,9 @@
                     BR: { x: quad.BR.x * sx, y: quad.BR.y * sy },
                 };
 
-                // Temporal smoothing (alpha = 0.70)
+                // Temporal smoothing (alpha = 0.55 — track changes faster)
                 if (this._lastQuad) {
-                    const a = 0.70, b = 1 - a;
+                    const a = 0.55, b = 1 - a;
                     this._lastQuad = {
                         TL: { x: a * fullQuad.TL.x + b * this._lastQuad.TL.x, y: a * fullQuad.TL.y + b * this._lastQuad.TL.y },
                         TR: { x: a * fullQuad.TR.x + b * this._lastQuad.TR.x, y: a * fullQuad.TR.y + b * this._lastQuad.TR.y },
@@ -173,8 +178,9 @@
                 this._lostQuadFrames++;
                 activeQuad = this._lastQuad;
             } else {
-                this._lastQuad   = null;
-                this._lastWarpOk = false;
+                this._lastQuad      = null;
+                this._lastWarpOk    = false;
+                this._pendingCapture = false;  // abort any pending symbol capture
                 if (this.onDebug) this.onDebug({
                     screenFound: false, cvReady: true,
                     candidateCount: this._lastCandidateCount || 0,
@@ -215,21 +221,47 @@
             const luma  = 0.299 * ckRgb.r + 0.587 * ckRgb.g + 0.114 * ckRgb.b;
             const ckSt  = luma < this.clockMidLuma ? 'B' : 'W';
 
-            // K-frame debounce
-            this._debounce.push(ckSt);
-            if (this._debounce.length > this.K) this._debounce.shift();
-            let newSymbol = false;
-            if (this._debounce.length === this.K &&
-                this._debounce.every(s => s === this._debounce[0]) &&
-                this._debounce[0] !== this.lastClockState) {
-                this.lastClockState = this._debounce[0];
-                newSymbol = true;
-            }
+            // Tick down symbol cooldown counter
+            if (this._symbolCooldown > 0) this._symbolCooldown--;
 
-            // Sample data cells
+            // Sample data cells every frame (for debug display AND pending capture)
             const rawCellRgb = LO.CANON_CELLS.map(c =>
                 this._trimmedMean(warpedData.data, CS, CS, c.x, c.y, c.hw));
             const cellColors = rawCellRgb.map(rgb => this._classify(rgb));
+
+            // ── Pending capture check ─────────────────────────────────────────
+            // This runs FIRST so that the capture happens on the frame AFTER the
+            // clock transition was confirmed (giving the display one full frame to settle).
+            let newSymbol = false;
+            if (this._pendingCapture) {
+                if (ckSt === this.lastClockState) {
+                    // Clock still stable at the newly-locked state: safe to capture
+                    this._pendingCapture = false;
+                    this._symbolCooldown = this.COOLDOWN_FRAMES;
+                    newSymbol = true;
+                } else {
+                    // Clock changed again before we could capture — discard (glitch)
+                    this._pendingCapture = false;
+                }
+            }
+
+            // ── K-frame debounce ──────────────────────────────────────────────
+            // All K frames must agree AND must differ from the last confirmed state.
+            // Evaluated AFTER pending capture so transition arms for the NEXT frame.
+            this._debounce.push(ckSt);
+            if (this._debounce.length > this.K) this._debounce.shift();
+
+            const debounceAllSame = this._debounce.length === this.K &&
+                                    this._debounce.every(s => s === this._debounce[0]);
+            const clockTransition = debounceAllSame &&
+                                    this._debounce[0] !== this.lastClockState &&
+                                    this._symbolCooldown === 0;
+
+            if (clockTransition) {
+                this.lastClockState  = this._debounce[0];
+                this._debounce       = [];    // clear buffer to prevent re-triggering
+                this._pendingCapture = true;  // arm: sample cells on the NEXT frame
+            }
 
             if (this.onDebug) {
                 this.onDebug({
@@ -245,6 +277,7 @@
                     cvReady: true,
                     candidateCount: this._lastCandidateCount || 4,
                     fps: this._lastFps,
+                    cooldown: this._symbolCooldown,
                 });
             }
 
@@ -441,23 +474,43 @@
             const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
             const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
 
-            // Sort points clockwise by angle around centroid
-            const sortedByAngle = [...pts].sort((a, b) =>
-                Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx)
-            );
+            // Classify each point into quadrant relative to centroid.
+            // This is robust to camera tilt: TL has negative dx AND negative dy,
+            // TR has positive dx AND negative dy, etc.
+            // Ties (near-axis points) are broken by angle.
+            const withAngle = pts.map(p => ({
+                p,
+                dx: p.x - cx,
+                dy: p.y - cy,
+                angle: Math.atan2(p.y - cy, p.x - cx), // -π to π
+            }));
 
-            // Find Top-Left corner (smallest x + y in upright orientation)
-            let tlIdx = 0, minSum = Infinity;
-            sortedByAngle.forEach((p, idx) => {
-                const sum = p.x + p.y;
-                if (sum < minSum) { minSum = sum; tlIdx = idx; }
-            });
+            // Sort clockwise starting from -π (left side)
+            withAngle.sort((a, b) => a.angle - b.angle);
 
-            // Follow clockwise order: TL -> TR -> BR -> BL
-            const TL = sortedByAngle[tlIdx];
-            const TR = sortedByAngle[(tlIdx + 1) % 4];
-            const BR = sortedByAngle[(tlIdx + 2) % 4];
-            const BL = sortedByAngle[(tlIdx + 3) % 4];
+            // After angle sort (counter-clockwise order from -π):
+            // The four points in CCW order from -π are: TL, BL, BR, TR
+            // Rearrange to CW order: TL, TR, BR, BL
+            // Strategy: assign by quadrant sign
+            let TL, TR, BR, BL;
+            for (const { p, dx, dy } of withAngle) {
+                if (dx <= 0 && dy <= 0) TL = p;        // upper-left
+                else if (dx >= 0 && dy <= 0) TR = p;   // upper-right
+                else if (dx >= 0 && dy >= 0) BR = p;   // lower-right
+                else                          BL = p;   // lower-left
+            }
+
+            // Fallback: if a quadrant was empty (obtuse quad), use angle order
+            if (!TL || !TR || !BR || !BL) {
+                // Angle-sorted CCW: indices are TL=0,BL=1,BR=2,TR=3 (roughly)
+                // Re-sort by smallest x+y for TL
+                const bySum = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y));
+                TL = bySum[0];
+                BR = bySum[3];
+                const remaining = [bySum[1], bySum[2]];
+                TR = remaining[0].x > remaining[1].x ? remaining[0] : remaining[1];
+                BL = remaining[0].x < remaining[1].x ? remaining[0] : remaining[1];
+            }
 
             return { TL, TR, BR, BL };
         }
@@ -623,6 +676,8 @@
         resetClock() {
             this.lastClockState  = 'B';
             this._debounce       = [];
+            this._symbolCooldown = 0;
+            this._pendingCapture = false;
             this._lastQuad       = null;
             this._lostQuadFrames = 0;
         }

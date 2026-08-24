@@ -545,8 +545,9 @@
             found ? '4/4 detected' : `searching… (${info.candidateCount || 0} candidates)`;
 
         if (info.clockState !== undefined) {
+            const pending  = info.newSymbol ? ' ★ SYMBOL' : (info.cooldown > 0 ? ` [cd:${info.cooldown}]` : '');
             document.getElementById('dbg-clock').textContent =
-                `${info.clockState}  luma=${info.luma}  mid=${info.midLuma}`;
+                `${info.clockState}  luma=${info.luma}  mid=${info.midLuma}${pending}`;
         }
         if (info.cellColors !== undefined) {
             document.getElementById('dbg-cells').textContent = info.cellColors.join(' ');
@@ -789,7 +790,8 @@
         el('dbg-v-candidates').textContent = `${info.candidateCount || 0} candidates  |  ${info.fps || 0} fps`;
 
         if (info.clockState !== undefined) {
-            el('dbg-v-clock').textContent = `${info.clockState === 'B' ? 'BLACK' : 'WHITE'} (luma=${info.luma}, mid=${info.midLuma})`;
+            const pending = info.newSymbol ? ' ★ SYMBOL' : (info.cooldown > 0 ? ` [cooldown:${info.cooldown}]` : '');
+            el('dbg-v-clock').textContent = `${info.clockState === 'B' ? 'BLACK' : 'WHITE'} (luma=${info.luma}, mid=${info.midLuma})${pending}`;
         }
 
         if (info.cellColors !== undefined) {
