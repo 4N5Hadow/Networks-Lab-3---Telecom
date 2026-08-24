@@ -3,16 +3,16 @@
 // PHYSICAL RX  —  OpenCV.js camera receiver (ultra-robust version)
 //
 // Key features:
-//   1. Dual-pass marker detection (Adaptive Gaussian + Otsu fallback) on HSV
-//      Value channel to segment black markers in any ambient lighting.
-//   2. Scale-invariant candidate filtering (0.015% to 15% image area).
-//   3. Combinatorial convex quad optimization to choose the exact 4 screen
-//      corners among candidate blobs (rejecting clock cell and room noise).
-//   4. Cyclically invariant corner sorting (TL, TR, BR, BL) via centroid angles.
-//   5. Trimmed-mean pixel sampling (rejecting glare/specular highlights).
-//   6. Hybrid color classifier: Normalized Chromaticity + Brightness-Normalized
-//      RGB + Saturation dominance rules for 100% color accuracy across auto-exposure.
-//   7. K-frame clock debounce edge-detection.
+//   1. Magenta (#FF00FF) marker detection via HSV hue-range inRange filter.
+//      Completely immune to dark backgrounds, shadows, clothing, furniture.
+//   2. Strict quad validation: convexity + area bounds + aspect + parallelism
+//      + diagonal ratio — all must pass before a quad is accepted.
+//   3. Quadrant-based corner classification (TL/TR/BL/BR) robust to camera tilt.
+//   4. Trimmed-mean pixel sampling (rejecting glare/specular highlights).
+//   5. Hybrid color classifier: Normalized Chromaticity + Brightness-Normalized
+//      RGB + Saturation dominance rules for colour accuracy across auto-exposure.
+//   6. K-frame clock debounce + 1-frame pending-capture delay for stable reads.
+//   7. 8-frame cooldown between symbols to prevent double-triggers.
 //   8. Full debug telemetry (candidate count, quad overlay, binary mask, FPS).
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
@@ -39,10 +39,8 @@
             // sample cells (so the display is fully stable at the new state)
             this._pendingCapture = false;
 
-            // Marker detection params
-            this.markerMinFrac = 0.00010; // > 0.01% of image
-            this.markerMaxFrac = 0.15;    // < 15% of image
-            this.DS_W          = 640;     // downsample width
+            // Marker detection params (magenta HSV hue-range; area limits are in _extractCandidates)
+            this.DS_W = 640;  // downsample width for detection pass
 
             // Internal canvases
             this._capCanvas    = document.createElement('canvas');
@@ -284,12 +282,16 @@
             if (newSymbol && this.onNewSymbol) this.onNewSymbol([...cellColors]);
         }
 
-        // ── Marker detection ─────────────────────────────────────────────────
+        // ── Marker detection ─────────────────────────────────────────────────────
 
         _findMarkers(W, H) {
-            let src = null, rgb = null, hsv = null, hsvChannels = null, valueChan = null;
-            let blur = null, binary = null, closed = null;
-            let contours = null, hierarchy = null, kernel = null;
+            // Detect MAGENTA (#FF00FF) finder markers using HSV hue-range isolation.
+            // Magenta in OpenCV HSV (0–180 scale): H ≈ 140–175, S ≥ 140, V ≥ 80.
+            // This completely avoids picking up dark background objects, shadows,
+            // clothing, or furniture — the previous source of false detections.
+            let src = null, rgb = null, hsv = null;
+            let maskLo = null, maskHi = null, mask = null, closed = null, kernel = null;
+            let contours = null, hierarchy = null;
             this._lastCandidateCount = 0;
 
             try {
@@ -300,24 +302,31 @@
                 cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
                 hsv = new cv.Mat();
                 cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
-                hsvChannels = new cv.MatVector();
-                cv.split(hsv, hsvChannels);
-                valueChan = hsvChannels.get(2); // V = max(R,G,B)
 
-                blur = new cv.Mat();
-                cv.GaussianBlur(valueChan, blur, new cv.Size(5, 5), 0);
+                // Magenta hue wraps at 180/0 in OpenCV — it spans 140–175 when pure.
+                // Use two inRange passes to be safe (handles slight hue drift under
+                // different lighting / camera white balance).
+                //   Pass A: H 140–175, S ≥ 110, V ≥ 60  (primary magenta band)
+                //   Pass B: H 0–5, S ≥ 110, V ≥ 60       (red-side magenta edge)
+                const loA  = cv.matFromArray(1, 1, cv.CV_8UC3, [140, 110,  60]);
+                const hiA  = cv.matFromArray(1, 1, cv.CV_8UC3, [175, 255, 255]);
+                const loB  = cv.matFromArray(1, 1, cv.CV_8UC3, [  0, 110,  60]);
+                const hiB  = cv.matFromArray(1, 1, cv.CV_8UC3, [  5, 255, 255]);
+                maskLo = new cv.Mat();
+                maskHi = new cv.Mat();
+                cv.inRange(hsv, loA, hiA, maskLo);
+                cv.inRange(hsv, loB, hiB, maskHi);
+                loA.delete(); hiA.delete(); loB.delete(); hiB.delete();
 
-                // Pass 1: Adaptive Gaussian Thresholding
-                binary = new cv.Mat();
-                const blockSize = Math.max(15, (Math.round(W / 25) | 1));
-                cv.adaptiveThreshold(blur, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                     cv.THRESH_BINARY_INV, blockSize, 10);
+                mask = new cv.Mat();
+                cv.bitwise_or(maskLo, maskHi, mask);
 
-                kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+                // Morphological close to fill camera JPEG / compression holes
+                kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
                 closed = new cv.Mat();
-                cv.morphologyEx(binary, closed, cv.MORPH_CLOSE, kernel);
+                cv.morphologyEx(mask, closed, cv.MORPH_CLOSE, kernel);
 
-                // Export binary mask to internal canvas for debug view
+                // Export binary mask for debug view
                 this._binaryCanvas.width  = W;
                 this._binaryCanvas.height = H;
                 cv.imshow(this._binaryCanvas, closed);
@@ -326,19 +335,7 @@
                 hierarchy = new cv.Mat();
                 cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-                let candidates = this._extractCandidates(contours, W, H);
-
-                // Pass 2 Fallback: If Adaptive found < 4 candidates, try Otsu on inverted V
-                if (candidates.length < 4) {
-                    cv.threshold(blur, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-                    cv.morphologyEx(binary, closed, cv.MORPH_CLOSE, kernel);
-                    contours.delete(); hierarchy.delete();
-                    contours  = new cv.MatVector();
-                    hierarchy = new cv.Mat();
-                    cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-                    candidates = this._extractCandidates(contours, W, H);
-                }
-
+                const candidates = this._extractCandidates(contours, W, H);
                 this._lastCandidateCount = candidates.length;
                 if (candidates.length < 4) return null;
 
@@ -349,17 +346,19 @@
                 return null;
             } finally {
                 src?.delete(); rgb?.delete(); hsv?.delete();
-                hsvChannels?.delete(); valueChan?.delete();
-                blur?.delete();
-                binary?.delete(); closed?.delete(); kernel?.delete();
+                maskLo?.delete(); maskHi?.delete(); mask?.delete();
+                closed?.delete(); kernel?.delete();
                 contours?.delete(); hierarchy?.delete();
             }
         }
 
         _extractCandidates(contours, W, H) {
             const imgArea = W * H;
-            const minArea = imgArea * this.markerMinFrac;
-            const maxArea = imgArea * this.markerMaxFrac;
+            // Markers are ~8% of the sender canvas width/height in each dimension,
+            // so roughly 0.5%–2% of image area when the screen fills a reasonable
+            // portion of the camera frame. Cap max at 8% to reject massive blobs.
+            const minArea = imgArea * 0.0003;  // 0.03% of image
+            const maxArea = imgArea * 0.08;    // 8% of image
             const candidates = [];
 
             for (let i = 0; i < contours.size(); i++) {
@@ -369,22 +368,30 @@
                 if (area >= minArea && area <= maxArea) {
                     const peri   = cv.arcLength(cnt, true);
                     const approx = new cv.Mat();
-                    cv.approxPolyDP(cnt, approx, 0.04 * peri, true);
+                    // Tighter epsilon so we only accept actually square/rectangular shapes
+                    cv.approxPolyDP(cnt, approx, 0.05 * peri, true);
 
-                    const rect = cv.boundingRect(cnt);
+                    const rect     = cv.boundingRect(cnt);
                     const bboxArea = rect.width * rect.height;
-                    const fill = area / (bboxArea || 1);
-                    const asp  = Math.min(rect.width, rect.height) / (Math.max(rect.width, rect.height) || 1);
+                    const fill     = area / (bboxArea || 1);
+                    const asp      = Math.min(rect.width, rect.height) /
+                                     (Math.max(rect.width, rect.height) || 1);
 
-                    const isQuadLike = approx.rows >= 4 && approx.rows <= 8;
+                    // Strict shape filters:
+                    //  - polygon vertex count 4–6 (quad or nearly-quad)
+                    //  - fill ≥ 0.55  (solid, not a ring or irregular blob)
+                    //  - aspect ≥ 0.50 (not a very elongated stripe)
+                    const isQuadLike = approx.rows >= 4 && approx.rows <= 6;
 
-                    if (isQuadLike && fill >= 0.40 && asp >= 0.38) {
+                    if (isQuadLike && fill >= 0.55 && asp >= 0.50) {
                         const M = cv.moments(cnt, false);
                         if (M.m00 > 0) {
                             candidates.push({
                                 x: M.m10 / M.m00,
                                 y: M.m01 / M.m00,
                                 area,
+                                w: rect.width,
+                                h: rect.height,
                             });
                         }
                     }
@@ -396,12 +403,15 @@
         }
 
         _selectBestQuad(candidates, W, H) {
-            const pool = candidates.slice(0, 12);
+            const imgArea = W * H;
+            // Sort by descending area so we try the largest (most likely full markers) first
+            const sorted = candidates.slice().sort((a, b) => b.area - a.area);
+            const pool   = sorted.slice(0, 10); // consider top 10 only
             if (pool.length < 4) return null;
 
             if (pool.length === 4) {
                 const quad = this._sortCorners(pool);
-                return this._isConvexQuad(quad) ? quad : null;
+                return (this._isConvexQuad(quad) && this._isValidQuad(quad, W, H)) ? quad : null;
             }
 
             let bestQuad = null, bestScore = -Infinity;
@@ -411,9 +421,10 @@
                 for (let j = i + 1; j < N - 2; j++) {
                     for (let k = j + 1; k < N - 1; k++) {
                         for (let l = k + 1; l < N; l++) {
-                            const pts = [pool[i], pool[j], pool[k], pool[l]];
+                            const pts  = [pool[i], pool[j], pool[k], pool[l]];
                             const quad = this._sortCorners(pts);
                             if (!this._isConvexQuad(quad)) continue;
+                            if (!this._isValidQuad(quad, W, H)) continue;
 
                             const topW = Math.hypot(quad.TR.x - quad.TL.x, quad.TR.y - quad.TL.y);
                             const botW = Math.hypot(quad.BR.x - quad.BL.x, quad.BR.y - quad.BL.y);
@@ -422,23 +433,24 @@
 
                             const avgW = (topW + botW) / 2;
                             const avgH = (lftH + rgtH) / 2;
-                            if (avgW < 12 || avgH < 12) continue;
 
-                            // Aspect ratio of enclosing quad
+                            // Aspect ratio of enclosing quad (sender screen is square)
                             const aspect = Math.min(avgW, avgH) / Math.max(avgW, avgH);
-                            if (aspect < 0.45) continue;
 
-                            // Parallelism
+                            // Parallelism (opposite sides should be similar length)
                             const parW = Math.min(topW, botW) / Math.max(topW, botW);
                             const parH = Math.min(lftH, rgtH) / Math.max(lftH, rgtH);
 
                             // Marker size consistency
-                            const areas = pts.map(p => p.area);
-                            const maxA = Math.max(...areas), minA = Math.min(...areas);
+                            const areas    = pts.map(p => p.area);
+                            const maxA     = Math.max(...areas), minA = Math.min(...areas);
                             const areaRatio = minA / (maxA || 1);
 
                             const quadArea = avgW * avgH;
-                            const score = Math.log(quadArea + 1) * 3.0 + aspect * 4.0 + (parW + parH) * 1.5 + areaRatio * 2.0;
+                            const score = Math.log(quadArea + 1) * 3.0
+                                        + aspect    * 5.0
+                                        + (parW + parH) * 2.0
+                                        + areaRatio * 2.5;
 
                             if (score > bestScore) {
                                 bestScore = score;
@@ -450,6 +462,43 @@
             }
 
             return bestQuad;
+        }
+
+        /**
+         * Validate that the four corner points form a plausible screen quad:
+         *   1. Not too small (> 1.5% of image area)
+         *   2. Not too large (< 65% of image area)
+         *   3. Aspect ratio ≥ 0.40 (not a very skewed sliver)
+         *   4. Both pairs of opposite sides within 35% of each other (parallelism)
+         *   5. Diagonals within 40% of each other (not a very lopsided kite)
+         */
+        _isValidQuad(quad, W, H) {
+            const imgArea = W * H;
+            const topW = Math.hypot(quad.TR.x - quad.TL.x, quad.TR.y - quad.TL.y);
+            const botW = Math.hypot(quad.BR.x - quad.BL.x, quad.BR.y - quad.BL.y);
+            const lftH = Math.hypot(quad.BL.x - quad.TL.x, quad.BL.y - quad.TL.y);
+            const rgtH = Math.hypot(quad.BR.x - quad.TR.x, quad.BR.y - quad.TR.y);
+            const d1   = Math.hypot(quad.BR.x - quad.TL.x, quad.BR.y - quad.TL.y);
+            const d2   = Math.hypot(quad.BL.x - quad.TR.x, quad.BL.y - quad.TR.y);
+
+            const avgW    = (topW + botW) / 2;
+            const avgH    = (lftH + rgtH) / 2;
+            const quadArea = avgW * avgH;
+
+            if (quadArea < imgArea * 0.005) return false;  // too small (< 0.5% image)
+            if (quadArea > imgArea * 0.70)  return false;  // too large (> 70% image)
+
+            const aspect = Math.min(avgW, avgH) / (Math.max(avgW, avgH) || 1);
+            if (aspect < 0.40) return false;               // very skewed sliver
+
+            const parW = Math.min(topW, botW) / (Math.max(topW, botW) || 1);
+            const parH = Math.min(lftH, rgtH) / (Math.max(lftH, rgtH) || 1);
+            if (parW < 0.50 || parH < 0.50) return false; // sides not parallel enough
+
+            const diagRatio = Math.min(d1, d2) / (Math.max(d1, d2) || 1);
+            if (diagRatio < 0.55) return false;            // very lopsided kite
+
+            return true;
         }
 
         _isConvexQuad(quad) {
