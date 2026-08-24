@@ -2,16 +2,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // PHYSICAL TX  —  Canvas sender with high-contrast layout
 //
-// Layout: 4 MAGENTA corner markers on a grey background, 1 clock cell
+// Layout: 4 black corner markers on a white/light background, 1 clock cell
 //         (toggling B/W), and a 2×2 data grid of coloured cells.
 //
 // Key design choices for robust camera detection:
-//   - Markers are MAGENTA (#FF00FF): a hue never found in natural scenes and
-//     trivially separated from R/G/B/White data cells in HSV hue-range.
-//   - Background is GREY (#808080): neutral mid-tone so it never saturates the
-//     hue detector and provides good contrast for white/coloured data cells.
-//   - Clock cell toggles BLACK/WHITE with a black outline so it is always
-//     visible against both the grey background and the grey background.
+//   - Background is WHITE (#FFFFFF) for maximum contrast with black markers
+//   - Marker-to-data-cell gap is large enough that the data cells never
+//     get confused with markers by the contour detector
+//   - Thick black border around the entire grid area acts as additional
+//     visual frame but is NOT part of the marker detection
+//   - Data cells use SATURATED colours (pure R/G/B + white) for best
+//     colour separation through a phone camera
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
     const LO = window.LAYOUT;
@@ -44,16 +45,16 @@
             const ctx = this.ctx;
             const { S, pad, act, mS, ckS, cS } = this._dim();
 
-            // ── Background: medium grey — neutral hue, never trips the magenta detector
-            ctx.fillStyle = '#808080';
+            // ── Background: medium grey — contrasts with both black markers and white cells
+            ctx.fillStyle = '#C0C0C0';
             ctx.fillRect(0, 0, S, S);
 
-            // ── Finder markers (MAGENTA — unique hue, absent from natural scenes) ─
-            ctx.fillStyle = '#FF00FF';
-            ctx.fillRect(pad,              pad,              mS, mS);   // TL
-            ctx.fillRect(pad + act - mS,   pad,              mS, mS);   // TR
-            ctx.fillRect(pad,              pad + act - mS,   mS, mS);   // BL
-            ctx.fillRect(pad + act - mS,   pad + act - mS,   mS, mS);  // BR
+            // ── Finder markers (solid black) ─────────────────────────────────
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(pad,           pad,           mS, mS);   // TL
+            ctx.fillRect(pad + act - mS, pad,          mS, mS);   // TR
+            ctx.fillRect(pad,           pad + act - mS, mS, mS);  // BL
+            ctx.fillRect(pad + act - mS, pad + act - mS, mS, mS); // BR
 
             // ── Clock cell (centred between TL and TR markers) ───────────────
             const ckX = pad + act / 2 - ckS / 2;

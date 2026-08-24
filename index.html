@@ -215,64 +215,27 @@
 
       <!-- Vision section -->
       <section class="dbg-section">
-        <h3 class="dbg-section-title">Vision Pipeline Diagnostics</h3>
+        <h3 class="dbg-section-title">Vision Pipeline</h3>
         <div class="dbg-row-inline">
           <button id="btn-dbg-cam-start" class="dbg-btn listen">Start Camera Feed</button>
           <button id="btn-dbg-cam-stop" class="dbg-btn stop" disabled>Stop</button>
-          <button id="btn-dbg-calib" class="dbg-btn ack" disabled>Sample Calibration</button>
         </div>
-
-        <div class="dbg-vision-grid three-col">
+        <div class="dbg-vision-grid">
           <div class="dbg-vision-cell">
-            <span class="dbg-vision-label">Camera Feed (with overlay)</span>
-            <div class="dbg-cam-wrapper">
-              <video id="dbg-video" playsinline muted autoplay class="dbg-video"></video>
-              <canvas id="dbg-overlay" class="cam-overlay"></canvas>
-            </div>
+            <span class="dbg-vision-label">Camera Feed</span>
+            <video id="dbg-video" playsinline muted autoplay class="dbg-video"></video>
           </div>
           <div class="dbg-vision-cell">
-            <span class="dbg-vision-label">Binary Mask (OpenCV V-Channel)</span>
-            <canvas id="dbg-binary-canvas" width="200" height="150" class="dbg-binary"></canvas>
-          </div>
-          <div class="dbg-vision-cell">
-            <span class="dbg-vision-label">Canonical Warped (400×400)</span>
+            <span class="dbg-vision-label">Warped View (400×400)</span>
             <canvas id="dbg-warp-canvas" width="200" height="200" class="dbg-warp"></canvas>
           </div>
         </div>
-
-        <!-- Live Cell Color Swatches -->
-        <div class="dbg-swatches-box">
-          <span class="dbg-swatches-title">Live 2×2 Cell Classification (Raster: TL, TR, BL, BR):</span>
-          <div class="dbg-swatches-grid">
-            <div class="dbg-swatch-item" id="dbg-swatch-0">
-              <div class="dbg-swatch-color" id="dbg-swatch-color-0"></div>
-              <span class="dbg-swatch-label" id="dbg-swatch-name-0">TL: —</span>
-              <span class="dbg-swatch-bits mono" id="dbg-swatch-bits-0">00</span>
-            </div>
-            <div class="dbg-swatch-item" id="dbg-swatch-1">
-              <div class="dbg-swatch-color" id="dbg-swatch-color-1"></div>
-              <span class="dbg-swatch-label" id="dbg-swatch-name-1">TR: —</span>
-              <span class="dbg-swatch-bits mono" id="dbg-swatch-bits-1">01</span>
-            </div>
-            <div class="dbg-swatch-item" id="dbg-swatch-2">
-              <div class="dbg-swatch-color" id="dbg-swatch-color-2"></div>
-              <span class="dbg-swatch-label" id="dbg-swatch-name-2">BL: —</span>
-              <span class="dbg-swatch-bits mono" id="dbg-swatch-bits-2">10</span>
-            </div>
-            <div class="dbg-swatch-item" id="dbg-swatch-3">
-              <div class="dbg-swatch-color" id="dbg-swatch-color-3"></div>
-              <span class="dbg-swatch-label" id="dbg-swatch-name-3">BR: —</span>
-              <span class="dbg-swatch-bits mono" id="dbg-swatch-bits-3">11</span>
-            </div>
-          </div>
-        </div>
-
         <div class="dbg-vision-stats">
-          <div class="dbg-stat"><span class="dbg-stat-k">Screen Quad</span><span id="dbg-v-markers" class="dbg-stat-v">—</span></div>
-          <div class="dbg-stat"><span class="dbg-stat-k">Candidates / FPS</span><span id="dbg-v-candidates" class="dbg-stat-v mono">—</span></div>
-          <div class="dbg-stat"><span class="dbg-stat-k">Clock State / Luma</span><span id="dbg-v-clock" class="dbg-stat-v mono">—</span></div>
-          <div class="dbg-stat"><span class="dbg-stat-k">Live 8-Bit Symbol</span><span id="dbg-v-symbol-bits" class="dbg-stat-v mono accent">—</span></div>
-          <div class="dbg-stat"><span class="dbg-stat-k">Cell RGB (TL, TR, BL, BR)</span><span id="dbg-v-rgb" class="dbg-stat-v mono small">—</span></div>
+          <div class="dbg-stat"><span class="dbg-stat-k">Markers found</span><span id="dbg-v-markers" class="dbg-stat-v">—</span></div>
+          <div class="dbg-stat"><span class="dbg-stat-k">Candidates</span><span id="dbg-v-candidates" class="dbg-stat-v">—</span></div>
+          <div class="dbg-stat"><span class="dbg-stat-k">Clock luma</span><span id="dbg-v-clock" class="dbg-stat-v mono">—</span></div>
+          <div class="dbg-stat"><span class="dbg-stat-k">Cell colours</span><span id="dbg-v-cells" class="dbg-stat-v mono">—</span></div>
+          <div class="dbg-stat"><span class="dbg-stat-k">Cell RGB</span><span id="dbg-v-rgb" class="dbg-stat-v mono small">—</span></div>
         </div>
       </section>
     </div>
