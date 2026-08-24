@@ -210,18 +210,44 @@
         // ── Marker detection ─────────────────────────────────────────────────
 
         _findMarkers(W, H) {
-            let src = null, gray = null, blur = null, binary = null, closed = null;
+            let src = null, rgb = null, hsv = null, hsvChannels = null, valueChan = null;
+            let blur = null, binary = null, closed = null;
             let contours = null, hierarchy = null, kernel = null;
             this._lastCandidateCount = 0;
 
             try {
                 const imgData = this._capCtx.getImageData(0, 0, W, H);
                 src = cv.matFromImageData(imgData);
-                gray = new cv.Mat();
-                cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+                // Use HSV's VALUE channel (= max(R,G,B)) instead of a
+                // luma-weighted grayscale conversion (cv.COLOR_RGBA2GRAY,
+                // Y = 0.299R + 0.587G + 0.114B). This matters because the
+                // data cells use fully SATURATED pure colours. Luma makes
+                // pure red ≈76 and pure blue ≈29 — both DARKER than the
+                // plain grey background (192) — so Otsu thresholding was
+                // lumping the large colored data cells in with the small
+                // black marker squares as "dark" blobs. A data cell is
+                // ~7.5x the area of a real corner marker, and candidates
+                // are ranked "top 4 by area", so a red/blue cell would
+                // frequently outrank and displace a real marker, corrupting
+                // the quad (and therefore the whole perspective warp) —
+                // this was the actual cause of markers "not being detected
+                // completely" once real (colored) symbols started showing.
+                // HSV Value is max(R,G,B), which is 255 for every one of
+                // our saturated cell colours (each has one fully-lit
+                // channel) and near-zero only for true black/near-black
+                // pixels — cleanly separating markers from data cells
+                // regardless of which hue is showing.
+                rgb = new cv.Mat();
+                cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
+                hsv = new cv.Mat();
+                cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+                hsvChannels = new cv.MatVector();
+                cv.split(hsv, hsvChannels);
+                valueChan = hsvChannels.get(2); // H=0, S=1, V=2
 
                 blur = new cv.Mat();
-                cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+                cv.GaussianBlur(valueChan, blur, new cv.Size(5, 5), 0);
 
                 binary = new cv.Mat();
                 cv.threshold(blur, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
@@ -260,7 +286,29 @@
                             const M  = cv.moments(cnt, false);
                             const cx = M.m10 / (M.m00 || 1);
                             const cy = M.m01 / (M.m00 || 1);
-                            candidates.push({ x: cx, y: cy, area });
+
+                            // Corner-proximity gate: by design, the 4 finder
+                            // markers sit near the image CORNERS (small in
+                            // both x and y, or large in both x and y). The
+                            // clock cell (V=0 when in its black state) sits
+                            // near the top edge but horizontally CENTRED
+                            // (nx≈0.5) — not corner-like. It's smaller than
+                            // a real marker under normal conditions, but if
+                            // a real marker is partly occluded/blurred and
+                            // its apparent contour area shrinks, the clock
+                            // blob could still outrank it in the "top 4 by
+                            // area" selection, bumping a real marker out and
+                            // corrupting the quad. Require near-edge in
+                            // BOTH axes (i.e. an actual corner) so the clock
+                            // (and anything else near the centre, like data
+                            // cells) can never be mistaken for a marker.
+                            const nx = cx / W, ny = cy / H;
+                            const EDGE = 0.30;
+                            const isCornerX = nx < EDGE || nx > (1 - EDGE);
+                            const isCornerY = ny < EDGE || ny > (1 - EDGE);
+                            if (isCornerX && isCornerY) {
+                                candidates.push({ x: cx, y: cy, area });
+                            }
                         }
                         approx.delete();
                     }
@@ -284,7 +332,9 @@
                 console.warn('[PhysicalRX] findMarkers:', e.message);
                 return null;
             } finally {
-                src?.delete(); gray?.delete(); blur?.delete();
+                src?.delete(); rgb?.delete(); hsv?.delete();
+                hsvChannels?.delete(); valueChan?.delete();
+                blur?.delete();
                 binary?.delete(); closed?.delete(); kernel?.delete();
                 contours?.delete(); hierarchy?.delete();
             }

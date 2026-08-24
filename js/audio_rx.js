@@ -12,15 +12,21 @@
 //   threshold   = -45 dBFS absolute
 //   snrDb       = 12 dB above noise floor per frequency
 //   cooldown    = 600 ms
+//   debounce    = 2 consecutive polls (~120ms) must agree before firing
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
-    // Must match AudioTX.TONE_SPECS
+    // Must match AudioTX.TONE_SPECS. Frequencies were changed from the
+    // original 440/554, 1760/2217, 220/277 because those were literally
+    // the same two notes 3 octaves apart — speaker harmonic distortion
+    // made NACK's 2nd harmonic land on READY, and READY's 4th harmonic
+    // land on ACK, causing phantom detections. See audio_tx.js for detail.
     const CHORD_TONES = Object.freeze([
-        { name: 'READY', freqs: [440, 554]   },
-        { name: 'ACK',   freqs: [1760, 2217] },
-        { name: 'NACK',  freqs: [220, 277]   },
+        { name: 'READY', freqs: [520, 660]   },
+        { name: 'ACK',   freqs: [2150, 2650] },
+        { name: 'NACK',  freqs: [300, 380]   },
     ]);
     const BAND_HZ = 40;
+    const DEBOUNCE_POLLS = 2; // require this many consecutive polls agreeing
 
     class AudioRX {
         constructor() {
@@ -33,6 +39,8 @@
             this.cooldown  = 600;   // ms
             this._lastFire = 0;
             this._timer    = null;
+            this._pendingTone  = null;  // tone currently accumulating debounce
+            this._pendingCount = 0;
             /** @type {((name: string) => void)|null} */
             this.onTone    = null;
             /** @type {((info: object) => void)|null}
@@ -98,9 +106,16 @@
             const noiseFloor = noiseSum / binCount;
 
             const debugInfo = {};
+            let bestName = null, bestMargin = -Infinity;
 
+            // Evaluate ALL tones every poll (instead of stopping at the
+            // first pass). If more than one tone's band happens to pass in
+            // the same poll — e.g. from a harmonic or transient — we pick
+            // the one with the strongest SNR margin rather than whichever
+            // happened to be listed first in CHORD_TONES.
             for (const { name, freqs } of CHORD_TONES) {
                 let allPass = true;
+                let minMargin = Infinity;
                 const peaks = [];
 
                 for (const hz of freqs) {
@@ -114,9 +129,9 @@
                     }
                     peaks.push(peak);
 
-                    if (peak < this.threshold || (peak - noiseFloor) < this.snrDb) {
-                        allPass = false;
-                    }
+                    const margin = peak - noiseFloor;
+                    if (peak < this.threshold || margin < this.snrDb) allPass = false;
+                    if (margin < minMargin) minMargin = margin;
                 }
 
                 debugInfo[name] = {
@@ -125,18 +140,36 @@
                     pass: allPass,
                 };
 
-                if (allPass) {
-                    const now = Date.now();
-                    if (now - this._lastFire > this.cooldown) {
-                        this._lastFire = now;
-                        if (this.onDebugPoll) this.onDebugPoll(debugInfo);
-                        if (this.onTone) this.onTone(name);
-                    }
-                    return;
+                if (allPass && minMargin > bestMargin) {
+                    bestMargin = minMargin;
+                    bestName   = name;
                 }
             }
 
             if (this.onDebugPoll) this.onDebugPoll(debugInfo);
+
+            // Temporal debounce: a single noisy poll (transient click,
+            // harmonic spike, ambient sound) shouldn't be enough to fire a
+            // detection. Require the SAME best tone to win on
+            // DEBOUNCE_POLLS consecutive polls (~120ms at the 60ms poll
+            // interval) before accepting it. A real tone is held for
+            // 350-1000ms so this costs negligible latency.
+            if (bestName && bestName === this._pendingTone) {
+                this._pendingCount++;
+            } else {
+                this._pendingTone  = bestName;
+                this._pendingCount = bestName ? 1 : 0;
+            }
+
+            if (bestName && this._pendingCount >= DEBOUNCE_POLLS) {
+                const now = Date.now();
+                if (now - this._lastFire > this.cooldown) {
+                    this._lastFire     = now;
+                    this._pendingTone  = null;
+                    this._pendingCount = 0;
+                    if (this.onTone) this.onTone(bestName);
+                }
+            }
         }
     }
 
