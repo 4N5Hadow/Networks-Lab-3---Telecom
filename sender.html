@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Sender - TeleCom System</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="screen-sender">
+    <section id="tx-canvas-wrapper">
+      <canvas id="tx-canvas"></canvas>
+    </section>
+
+    <section id="sender-panel">
+      <header>
+        <h2>Sender</h2>
+        <span id="sender-status-badge" class="badge">IDLE</span>
+      </header>
+
+      <div class="fields">
+        <label for="msg-bits">Message bits (up to 20 bits):</label>
+        <input type="text" id="msg-bits" placeholder="e.g. 0100011" maxlength="20" autocomplete="off" inputmode="text">
+        
+        <label for="error-bit">Simulated Error Bit Index:</label>
+        <input type="number" id="error-bit" placeholder="none" min="0" max="19">
+      </div>
+
+      <div class="btn-row">
+        <button id="btn-show-calib" disabled>Start Transmission</button>
+        <button id="btn-reset-sender">Reset</button>
+      </div>
+
+      <div id="sender-log" class="log-box"></div>
+    </section>
+  </main>
+
+  <!-- Standard Vanilla JS architecture, similar to WebRTC/OpenCV samples -->
+  <script src="js/layout.js"></script>
+  <script src="js/hamming.js"></script>
+  <script src="js/framing.js"></script>
+  <script src="js/audio_tx.js"></script>
+  <script src="js/audio_rx.js"></script>
+  <script src="js/physical_tx.js"></script>
+  <script src="js/sender.js"></script>
+</body>
+</html>
