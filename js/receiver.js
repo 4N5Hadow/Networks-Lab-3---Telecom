@@ -4,21 +4,14 @@
  * receiver.js
  * 
  * Vanilla JS implementation of the Receiver side of the TeleCom system.
- * This pattern avoids frameworks and uses basic DOM manipulation,
- * similar to official WebRTC and OpenCV.js samples.
+ * This version uses MANUAL input for colors (W, R, G, B) rather than camera detection.
  */
 document.addEventListener('DOMContentLoaded', () => {
-    let RX = null;
     let rState = 'IDLE';
     let rBitBuf = [];
     let rSymCount = 0;
-    let _overlayCtx = null;
     let rAckRetransmitTimer = null;
     let rListenTimer = null;
-    let rLastSeenClockState = null;
-    let rScreenFound = false;
-    let rRttEstimate = 1500;
-    let rReadyTime = 0;
     let rLastDecodedSeq = null;
 
     function log(msg, type = '') {
@@ -44,70 +37,58 @@ document.addEventListener('DOMContentLoaded', () => {
         rState = st;
         const labels = {
             IDLE:        ['IDLE',        'idle'],
-            'CAMERA ON': ['CAMERA ON',   'active'],
             CALIBRATING: ['CALIBRATING', 'calib'],
             LISTEN:      ['LISTENING',   'active'],
             DONE:        ['DONE',        'success'],
         };
         const [text, type] = labels[st] || [st, 'idle'];
         setBadge(text, type);
+
+        const isListen = st === 'LISTEN';
+        document.getElementById('color-input').disabled = !isListen;
+        document.getElementById('btn-submit-symbol').disabled = !isListen;
     }
 
     function initReceiver() {
-        _overlayCtx = document.getElementById('rx-overlay').getContext('2d');
-        document.getElementById('btn-start-camera').onclick   = startCamera;
         document.getElementById('btn-calibrate').onclick      = startCalibration;
         document.getElementById('btn-reset-receiver').onclick = resetReceiver;
+        document.getElementById('btn-submit-symbol').onclick  = submitSymbol;
+        document.getElementById('color-input').onkeydown      = (e) => {
+            if (e.key === 'Enter') submitSymbol();
+        };
 
         setRxState('IDLE');
-        log('Receiver initialized. Start camera to begin.');
-    }
-
-    async function startCamera() {
-        document.getElementById('btn-start-camera').disabled = true;
-        const video = document.getElementById('rx-video');
-        RX = new PhysicalRX(video);
-        RX.onDebug     = updateOverlay; // Stripped down debug
-        RX.onNewSymbol = onNewSymbol;
-
-        const ok = await RX.start();
-        if (ok) {
-            document.getElementById('btn-calibrate').disabled = false;
-            setRxState('CAMERA ON');
-            log('Camera started. Frame the sender screen and press Calibrate.');
-        } else {
-            log('Unable to access camera.', 'error');
-            document.getElementById('btn-start-camera').disabled = false;
-        }
+        log('Receiver initialized. Press "Start Calibration & Listening" when ready.');
     }
 
     function startCalibration() {
-        if (!RX) return;
-        if (!window._cvReady) {
-            log('OpenCV runtime not ready yet.', 'warn');
-            return;
-        }
         document.getElementById('btn-calibrate').disabled = true;
         setRxState('CALIBRATING');
-        log('Sampling calibration reference colors (20 frames)...');
-        RX.startCalibration(() => {
-            log('Calibration complete.', 'success');
-            log('Transmitting READY tone...');
-            rReadyTime = Date.now();
-            AudioTX.playTone('READY').then(() => {
-                log('READY tone sent. Listening for incoming symbols...');
-                startListening();
-            });
+        
+        log('Transmitting READY tone...');
+        AudioTX.playTone('READY').then(() => {
+            log('READY tone sent. Ready to receive symbols (W/R/G/B).');
+            startListening();
         });
     }
 
     function startListening() {
         setRxState('LISTEN');
         rBitBuf = []; rSymCount = 0;
-        rLastSeenClockState = null;
-        if (RX) RX.resetClock();
         document.getElementById('rx-result-area').classList.add('hidden');
-        startListenTimer();
+        document.getElementById('color-input').value = '';
+        document.getElementById('color-input').focus();
+    }
+
+    function startListenTimer() {
+        stopListenTimer();
+        const timeout = Math.max(5000, Math.min(120000, 10 * rRttEstimate));
+        rListenTimer = setTimeout(() => {
+            if (rState === 'LISTEN') {
+                log(`Listen timeout (${Math.round(timeout / 1000)}s). Sending NACK...`, 'warn');
+                sendFinalNack();
+            }
+        }, timeout);
     }
 
     function stopListenTimer() {
@@ -117,17 +98,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function startListenTimer() {
-        stopListenTimer();
-        const timeout = Math.max(5000, Math.min(15000, 10 * rRttEstimate));
-        rListenTimer = setTimeout(() => {
-            if (rState === 'LISTEN') {
-                log(`Listen timeout (${Math.round(timeout / 1000)}s). Sending NACK...`, 'warn');
-                sendFinalNack();
-            }
-        }, timeout);
-    }
-
     function stopAckRetransmitTimer() {
         if (rAckRetransmitTimer !== null) {
             clearInterval(rAckRetransmitTimer);
@@ -135,40 +105,42 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function startAckRetransmitTimer() {
-        stopAckRetransmitTimer();
-        const interval = Math.max(1500, Math.min(6000, 2 * rRttEstimate));
+    function submitSymbol() {
+        if (rState !== 'LISTEN') return;
 
-        rAckRetransmitTimer = setInterval(() => {
-            if (rState !== 'LISTEN') {
-                stopAckRetransmitTimer();
+        const input = document.getElementById('color-input').value.trim().toUpperCase();
+        if (input.length !== 4) {
+            log(`Invalid input: "${input}". Must be exactly 4 characters (e.g. RGBW).`, 'warn');
+            return;
+        }
+
+        const map = { 'W': 0, 'R': 1, 'G': 2, 'B': 3 };
+        const cells = [];
+        for (let i = 0; i < 4; i++) {
+            const char = input[i];
+            if (!(char in map)) {
+                log(`Invalid character: "${char}". Use W, R, G, B.`, 'warn');
                 return;
             }
-            if (!rScreenFound) return;
+            cells.push(map[char]);
+        }
 
-            log('Sender clock unchanged. Retransmitting ACK...', 'warn');
-            AudioTX.playTone('ACK');
-        }, interval);
+        // Clear input for next symbol
+        document.getElementById('color-input').value = '';
+        document.getElementById('color-input').focus();
+
+        onNewSymbol(cells);
     }
 
     function onNewSymbol(cells) {
-        if (rState !== 'LISTEN') return;
         rSymCount++;
-
-        if (rSymCount === 1 && rReadyTime > 0) {
-            const firstRtt = Date.now() - rReadyTime;
-            if (firstRtt > 0 && firstRtt < 15000) {
-                rRttEstimate = firstRtt;
-                log(`Measured RTT: ${Math.round(rRttEstimate)}ms`);
-            }
-        }
 
         for (const c of cells) {
             rBitBuf.push((c >> 1) & 1);
             rBitBuf.push(c & 1);
         }
 
-        log(`Symbol ${rSymCount}/6 received: [${cells.map(c => Framing.COLOR_NAMES[c]).join(', ')}]`);
+        log(`Symbol ${rSymCount}/6 received manually: [${cells.map(c => Framing.COLOR_NAMES[c]).join(', ')}]`);
 
         if (rBitBuf.length >= Framing.PADDED_BITS) {
             stopAckRetransmitTimer();
@@ -183,9 +155,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } else {
             stopListenTimer();
-            startListenTimer();
             AudioTX.playTone('ACK');
-            startAckRetransmitTimer();
         }
     }
 
@@ -238,54 +208,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function sendFinalNack() {
         stopAckRetransmitTimer();
         stopListenTimer();
-        setRxState('CAMERA ON');
+        setRxState('IDLE');
         AudioTX.playTone('NACK').then(() => {
             log('NACK sent. Waiting for sender restart...', 'warn');
             rBitBuf = []; rSymCount = 0;
-            rLastSeenClockState = null;
-            if (RX) RX.resetClock();
             document.getElementById('btn-calibrate').disabled = false;
-        });
-    }
-
-    function updateOverlay(info) {
-        rScreenFound = info.screenFound;
-        if (info.clockState !== undefined) {
-            rLastSeenClockState = info.clockState;
-        }
-
-        const overlay = document.getElementById('rx-overlay');
-        const video   = document.getElementById('rx-video');
-        overlay.width  = overlay.offsetWidth  || video.offsetWidth;
-        overlay.height = overlay.offsetHeight || video.offsetHeight;
-        const ctx = _overlayCtx;
-        ctx.clearRect(0, 0, overlay.width, overlay.height);
-
-        const quad = info.quad;
-        if (!quad || !video.videoWidth) return;
-
-        const sx = overlay.width  / video.videoWidth;
-        const sy = overlay.height / video.videoHeight;
-        const pts = [quad.TL, quad.TR, quad.BR, quad.BL].map(p => ({
-            x: p.x * sx, y: p.y * sy
-        }));
-
-        ctx.fillStyle = 'rgba(34,211,165,0.10)';
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
-        pts.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
-        ctx.closePath();
-        ctx.fill();
-
-        ctx.strokeStyle = '#22d3a5';
-        ctx.lineWidth   = 2;
-        ctx.stroke();
-
-        pts.forEach(p => {
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
-            ctx.fillStyle = '#22d3a5';
-            ctx.fill();
         });
     }
 
@@ -294,20 +221,12 @@ document.addEventListener('DOMContentLoaded', () => {
         stopListenTimer();
         rLastDecodedSeq = null;
         rBitBuf = []; rSymCount = 0;
-        rLastSeenClockState = null;
-        rRttEstimate = 1500;
         setRxState('IDLE');
         document.getElementById('rx-result-area').classList.add('hidden');
         document.getElementById('receiver-log').innerHTML = '';
-        if (_overlayCtx) {
-            const o = document.getElementById('rx-overlay');
-            _overlayCtx.clearRect(0, 0, o.width, o.height);
-        }
-        if (RX) {
-            RX.reset();
-            document.getElementById('btn-calibrate').disabled = false;
-        }
-        log('Receiver reset. Press Calibrate to restart.');
+        document.getElementById('btn-calibrate').disabled = false;
+        document.getElementById('color-input').value = '';
+        log('Receiver reset. Press "Start Calibration & Listening" to restart.');
     }
 
     initReceiver();

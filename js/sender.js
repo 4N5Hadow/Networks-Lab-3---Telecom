@@ -40,7 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getSenderTimeout() {
-        return Math.max(5000, Math.min(15000, 10 * sRttEstimate));
+        return Math.max(5000, Math.min(120000, 10 * sRttEstimate));
     }
 
     async function initSender() {

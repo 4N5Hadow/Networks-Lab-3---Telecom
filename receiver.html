@@ -5,23 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>Receiver - TeleCom System</title>
   <link rel="stylesheet" href="style.css">
-  
-  <!-- Async loading pattern per OpenCV.js official docs -->
-  <script>
-    window._cvReady = false;
-    function _onOpenCvLoad() {
-      if (typeof cv !== 'undefined' && cv.Mat !== undefined) {
-        window._cvReady = true;
-        document.dispatchEvent(new Event('opencv-ready'));
-      } else if (typeof cv !== 'undefined') {
-        cv['onRuntimeInitialized'] = function () {
-          window._cvReady = true;
-          document.dispatchEvent(new Event('opencv-ready'));
-        };
-      }
-    }
-  </script>
-  <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="_onOpenCvLoad()"></script>
 </head>
 <body>
   <main id="screen-receiver">
@@ -31,9 +14,11 @@
     </header>
 
     <section class="rx-top">
-      <div class="cam-wrapper">
-        <video id="rx-video" playsinline muted autoplay></video>
-        <canvas id="rx-overlay" class="cam-overlay"></canvas>
+      <div class="fields">
+        <label for="color-input">Enter Symbol Colors (e.g. RGBW):</label>
+        <input type="text" id="color-input" placeholder="W, R, G, B" maxlength="4" autocomplete="off" class="mono" disabled>
+        <br>
+        <button id="btn-submit-symbol" class="btn" disabled>Submit Symbol</button>
       </div>
     </section>
 
@@ -45,21 +30,18 @@
     </section>
 
     <div class="btn-row">
-      <button id="btn-start-camera">Start Camera</button>
-      <button id="btn-calibrate" disabled>Calibrate</button>
+      <button id="btn-calibrate">Start Calibration & Listening</button>
       <button id="btn-reset-receiver">Reset</button>
     </div>
 
     <div id="receiver-log" class="log-box"></div>
   </main>
 
-  <!-- Standard Vanilla JS architecture, similar to WebRTC/OpenCV samples -->
   <script src="js/layout.js"></script>
   <script src="js/hamming.js"></script>
   <script src="js/framing.js"></script>
   <script src="js/audio_tx.js"></script>
   <script src="js/audio_rx.js"></script>
-  <script src="js/physical_rx.js"></script>
   <script src="js/receiver.js"></script>
 </body>
 </html>
