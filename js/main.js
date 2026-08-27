@@ -415,7 +415,9 @@
     // ACK retransmit timer: fires every 2×RTT to re-send ACK if sender hasn't
     // moved to the next symbol (detected by checking clock state hasn't changed)
     let rAckRetransmitTimer = null;
+    let rListenTimer        = null;   // connection timeout (10x RTT)
     let rLastSeenClockState = null;   // 'B' or 'W' — the clock state we last ACK'd
+    let rScreenFound        = false;  // whether camera sees the sender's screen
     let rRttEstimate        = 2000;   // receiver's RTT estimate (default 2s)
     let rReadyTime          = 0;      // when READY tone was sent (for initial RTT estimate)
 
@@ -496,8 +498,37 @@
         rLastSeenClockState = null;
         RX.resetClock();
         document.getElementById('rx-result-area').classList.add('hidden');
-        // No overall timeout — the ACK retransmit mechanism handles reliability.
-        // If the sender is truly gone, sender's own 10×RTT timeout handles it.
+        startListenTimer();
+    }
+
+    function stopListenTimer() {
+        if (rListenTimer !== null) {
+            clearTimeout(rListenTimer);
+            rListenTimer = null;
+        }
+    }
+
+    function startListenTimer() {
+        stopListenTimer();
+        const timeout = Math.max(5000, Math.min(30000, 10 * rRttEstimate));
+        log('receiver-log', `  Listen timer started (timeout=${Math.round(timeout / 1000)}s)`);
+        rListenTimer = setTimeout(() => {
+            if (rState === 'LISTEN') {
+                log('receiver-log', `Listen timeout (${Math.round(timeout / 1000)}s) — connection broken. Resetting to IDLE.`, 'warn');
+                handleConnectionBroken();
+            }
+        }, timeout);
+    }
+
+    function handleConnectionBroken() {
+        stopAckRetransmitTimer();
+        stopListenTimer();
+        setRxState('IDLE');
+        log('receiver-log', 'Waiting for sender to show calibration frame again…');
+        rBitBuf = []; rSymCount = 0;
+        rLastSeenClockState = null;
+        if (RX) RX.resetClock();
+        document.getElementById('btn-calibrate').disabled = false;
     }
 
     // Stop the ACK retransmit timer
@@ -524,6 +555,12 @@
                 return;
             }
 
+            // Only retransmit if we can actually see the screen. If blocked, we shouldn't blind ACK.
+            if (!rScreenFound) {
+                log('receiver-log', `  ACK retransmit: screen not found. Waiting…`, 'warn');
+                return;
+            }
+
             // Check: has the sender's clock changed since our last ACK?
             // We track this via rLastSeenClockState, which is updated in
             // updateDebugPanel from the live camera feed.
@@ -543,6 +580,7 @@
 
         // Stop any running ACK retransmit timer from the previous symbol
         stopAckRetransmitTimer();
+        startListenTimer(); // Reset the connection timeout
 
         rSymCount++;
 
@@ -603,6 +641,7 @@
 
     function handleDecodeSuccess(result) {
         stopAckRetransmitTimer();
+        stopListenTimer();
         setRxState('DONE');
         log('receiver-log', `Frame decoded! L=${result.L}  msg=${result.messageBits.join('')}`, 'success');
 
@@ -656,6 +695,7 @@
     // Receiver resets and goes back to IDLE (waiting for a new calibration cycle).
     function sendFinalNack() {
         stopAckRetransmitTimer();
+        stopListenTimer();
         setRxState('IDLE');
         AudioTX.playTone('NACK').then(() => {
             log('receiver-log', 'NACK sent. Sender will restart from SYN.', 'warn');
@@ -670,9 +710,9 @@
     }
 
     function updateDebugPanel(info) {
-        const found = info.screenFound;
+        rScreenFound = info.screenFound;
         document.getElementById('dbg-markers').textContent =
-            found ? '4/4 detected' : `searching… (${info.candidateCount || 0} candidates)`;
+            rScreenFound ? '4/4 detected' : `searching… (${info.candidateCount || 0} candidates)`;
 
         if (info.clockState !== undefined) {
             const pending  = info.newSymbol ? ' ★ SYMBOL' : (info.cooldown > 0 ? ` [cd:${info.cooldown}]` : '');
@@ -730,6 +770,7 @@
 
     function resetReceiver() {
         stopAckRetransmitTimer();
+        stopListenTimer();
         rBitBuf = []; rSymCount = 0;
         rLastSeenClockState = null;
         rRttEstimate = 2000;
@@ -751,6 +792,7 @@
 
     function cleanupReceiver() {
         stopAckRetransmitTimer();
+        stopListenTimer();
         if (RX) RX.stop();
     }
 
