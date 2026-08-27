@@ -27,9 +27,7 @@
 </head>
 <body>
 
-<!-- ═══════════════════════════════════════════════════════════════════════════
-     SCREEN 1 — Home
-════════════════════════════════════════════════════════════════════════════ -->
+<!-- Screen: Role Selector -->
 <div id="screen-role" class="screen active">
   <div class="role-page">
 
@@ -88,9 +86,7 @@
   </div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════════════════════
-     SCREEN 2 — Sender
-════════════════════════════════════════════════════════════════════════════ -->
+<!-- Screen: Sender -->
 <div id="screen-sender" class="screen">
   <div id="tx-canvas-wrapper">
     <canvas id="tx-canvas"></canvas>
@@ -106,26 +102,20 @@
 
     <div class="fields">
       <div class="field-group">
-        <label class="field-label" for="msg-bits">Message bits <span class="field-hint">(max 20, 0s and 1s only)</span></label>
+        <label class="field-label" for="msg-bits">Message bits <span class="field-hint">(up to 20 bits, binary)</span></label>
         <input type="text" id="msg-bits" class="field-input mono"
                placeholder="e.g. 0100011" maxlength="20" autocomplete="off"
                inputmode="text">
       </div>
 
-      <div class="field-row">
-        <div class="field-group half">
-          <label class="field-label" for="error-bit">Error bit index <span class="field-hint">(0-indexed, optional)</span></label>
-          <input type="number" id="error-bit" class="field-input" placeholder="none" min="0" max="19">
-        </div>
-        <div class="field-group half">
-          <label class="field-label" for="dwell-time">Hold time: <span id="dwell-val" class="accent">2000</span> ms</label>
-          <input type="range" id="dwell-time" class="slider" min="500" max="5000" value="2000" step="100">
-        </div>
+      <div class="field-group">
+        <label class="field-label" for="error-bit">Simulated Error Bit Index <span class="field-hint">(0-indexed, optional)</span></label>
+        <input type="number" id="error-bit" class="field-input" placeholder="none" min="0" max="19">
       </div>
     </div>
 
     <div class="btn-row">
-      <button id="btn-show-calib" class="btn btn-primary" disabled>Show Calibration Frame</button>
+      <button id="btn-show-calib" class="btn btn-primary" disabled>Start Transmission</button>
       <button id="btn-reset-sender" class="btn btn-ghost">Reset</button>
     </div>
 
@@ -133,9 +123,7 @@
   </div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════════════════════
-     SCREEN 3 — Receiver
-════════════════════════════════════════════════════════════════════════════ -->
+<!-- Screen: Receiver -->
 <div id="screen-receiver" class="screen">
   <div class="rx-layout">
 
@@ -179,9 +167,7 @@
   </div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════════════════════
-     SCREEN 4 — Debug Console
-════════════════════════════════════════════════════════════════════════════ -->
+<!-- Screen: Debug Console -->
 <div id="screen-debug" class="screen">
   <div class="debug-console">
     <div class="panel-header debug-header">

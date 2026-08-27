@@ -20,11 +20,11 @@
         codeword = Hamming.injectError(codeword, errorMsgBit);
 
         const frame = [
-            ...SYNC,                                // 7 bits
-            (seq & 1),                              // 1 bit sequence number
-            ...codeword,                            // 30 bits
-            ...END,                                 // 4 bits
-            ...new Array(PADDED_BITS - 42).fill(0), // 6 padding bits
+            ...SYNC,
+            (seq & 1),
+            ...codeword,
+            ...END,
+            ...new Array(PADDED_BITS - 42).fill(0),
         ];
         return frame;
     }

@@ -1,21 +1,5 @@
 'use strict';
-// ─────────────────────────────────────────────────────────────────────────────
-// MAIN — Autonomous Stop-and-Wait ARQ Protocol with Calibration Gate
-//
-// Features:
-//   1. Calibration Gate: Sender displays static calibration frame (SYN) and
-//      strictly waits for receiver's READY tone before transmitting.
-//   2. Strict Stop-and-Wait ARQ: Sender waits for ACK on each symbol before advancing.
-//   3. Receiver ACK Retransmit: If sender clock stays unchanged for 2×RTT,
-//      receiver retransmits ACK to heal dropped acoustic tones.
-//   4. Post-Transmit Black Screen: Sender clears screen to Black after Symbol 5
-//      and awaits final frame ACK/NACK.
-//   5. In-Place Hamming(30,25) FEC: Corrects 1-bit simulated error in-place,
-//      underlines error bit index, and sends Final ACK.
-//   6. Auto-Retransmit on Failure/NACK: Sender reverts to calibration frame (SYN),
-//      receiver auto-calibrates and sends READY, and frame is retransmitted
-//      without simulated error.
-// ─────────────────────────────────────────────────────────────────────────────
+
 (function () {
 
     function show(id) {
@@ -49,9 +33,6 @@
         if (st)  st.textContent = label;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  HOME / PERMISSIONS GATE
-    // ═══════════════════════════════════════════════════════════════════════════
     let _permGranted = false, _cvOk = false;
 
     function checkUnlock() {
@@ -89,7 +70,7 @@
         const btn  = document.getElementById('btn-grant-perms');
         const hint = document.getElementById('perm-hint');
         btn.disabled = true;
-        btn.textContent = 'Requesting…';
+        btn.textContent = 'Requesting...';
         hint.textContent = '';
 
         try {
@@ -121,7 +102,7 @@
             } else {
                 btn.disabled = false;
                 btn.textContent = 'Grant Camera & Microphone Access';
-                hint.textContent = 'Permission denied — enable in browser settings.';
+                hint.textContent = 'Permission denied - enable in browser settings.';
                 hint.style.color = 'var(--error)';
             }
         }
@@ -129,23 +110,19 @@
 
     initCvStatus();
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  SENDER
-    // ═══════════════════════════════════════════════════════════════════════════
+    // Sender
     let TX = null, SARX = null;
     let sState       = 'IDLE';
     let sMsgBits     = [];
     let sErrBit      = null;
     let sRetransmit  = false;
-    let sSeq         = 0;          // 1-bit sequence number (Alternating Bit Protocol)
-    let sSymbols     = [];         // the 6 encoded symbols
-    let sSymIdx      = 0;          // current symbol index being shown
-    let sSymTimer    = null;       // per-symbol watchdog timeout (10×RTT)
-    let sDecodeTimer = null;       // final ACK/NACK timeout
-
-    // Dynamic RTT estimation
-    let sRttEstimate = 1500;       // initial estimate (1.5 seconds)
-    let sSymShowTime = 0;          // timestamp when current symbol was shown
+    let sSeq         = 0;
+    let sSymbols     = [];
+    let sSymIdx      = 0;
+    let sSymTimer    = null;
+    let sDecodeTimer = null;
+    let sRttEstimate = 1500;
+    let sSymShowTime = 0;
 
     function getSenderTimeout() {
         return Math.max(5000, Math.min(15000, 10 * sRttEstimate));
@@ -163,8 +140,8 @@
         SARX.onTone = onSenderTone;
         SARX.start().then(ok => {
             log('sender-log', ok
-                ? 'Microphone ready — listening for tones.'
-                : 'Mic unavailable. ACK/NACK detection disabled.', ok ? '' : 'warn');
+                ? 'Microphone ready - listening for tones.'
+                : 'Microphone unavailable. Acoustic feedback disabled.', ok ? '' : 'warn');
         });
 
         document.getElementById('msg-bits').oninput   = () => { sanitizeBits(); validateSender(); };
@@ -181,7 +158,7 @@
 
         setSenderState('IDLE');
         validateSender();
-        log('sender-log', 'Sender ready. Use fullscreen for best optical alignment.');
+        log('sender-log', 'Sender initialized. Ready to transmit.');
     }
 
     function sanitizeBits() {
@@ -197,13 +174,13 @@
     function setSenderState(st) {
         sState = st;
         const labels = {
-            IDLE:         ['IDLE',              'idle'],
-            CALIBRATE:    ['CALIBRATE (GATE)',  'calib'],
-            ENCODE:       ['ENCODE',            'active'],
-            TRANSMIT:     ['SENDING SYM',       'active'],
-            SYM_GAP:      ['GAP',               'active'],   // deaf window
-            AWAIT_DECODE: ['AWAIT DECODE',      'calib'],
-            DONE:         ['DONE',              'success'],
+            IDLE:         ['IDLE',        'idle'],
+            CALIBRATE:    ['CALIBRATE',   'calib'],
+            ENCODE:       ['ENCODING',    'active'],
+            TRANSMIT:     ['TRANSMITTING','active'],
+            SYM_GAP:      ['GAP',         'active'],
+            AWAIT_DECODE: ['AWAIT DECODE','calib'],
+            DONE:         ['DONE',        'success'],
         };
         const [text, type] = labels[st] || [st, 'idle'];
         setBadge('sender-status-badge', text, type);
@@ -219,27 +196,27 @@
         sRttEstimate = 1500;
 
         if (sErrBit !== null && (sErrBit < 0 || sErrBit >= sMsgBits.length)) {
-            alert(`Error bit index ${sErrBit} is out of range (0–${sMsgBits.length - 1})`);
+            alert(`Error bit index ${sErrBit} out of range (0-${sMsgBits.length - 1})`);
             return;
         }
 
-        log('sender-log', `Message: ${bitsStr} (L=${sMsgBits.length}, simulated error bit=${sErrBit ?? 'none'})`);
+        log('sender-log', `Loaded message: ${bitsStr} (Length: ${sMsgBits.length}, simulated error: ${sErrBit ?? 'none'})`);
         showCalibFrame();
     }
 
     function showCalibFrame() {
         setSenderState('CALIBRATE');
         TX.drawCalibration();
-        log('sender-log', 'Calibration frame displayed. Waiting for READY tone from receiver…');
+        log('sender-log', 'Calibration pattern displayed. Waiting for receiver READY tone...');
     }
 
     function onSenderTone(tone) {
-        log('sender-log', `Received acoustic tone: ${tone}`);
+        log('sender-log', `Detected tone: ${tone}`);
 
         switch (sState) {
             case 'CALIBRATE':
                 if (tone === 'READY') {
-                    log('sender-log', 'READY tone detected! Opening transmission gate…', 'success');
+                    log('sender-log', 'READY tone detected. Starting transmission...', 'success');
                     doEncode();
                 }
                 break;
@@ -248,7 +225,6 @@
                 if (tone === 'ACK') {
                     clearTimeout(sSymTimer);
 
-                    // Update RTT estimate
                     const measuredRtt = Date.now() - sSymShowTime;
                     if (measuredRtt > 0 && measuredRtt < 15000) {
                         sRttEstimate = 0.7 * sRttEstimate + 0.3 * measuredRtt;
@@ -256,28 +232,26 @@
 
                     sSymIdx++;
                     if (sSymIdx >= sSymbols.length) {
-                        // All 6 symbols shown -> enter AWAIT_DECODE
                         setSenderState('AWAIT_DECODE');
-                        TX.drawIdle(); // Black screen
+                        TX.drawIdle();
                         const timeout = getSenderTimeout();
-                        log('sender-log', `All 6 symbols sent. Screen Black. Awaiting final frame decode (timeout=${Math.round(timeout/1000)}s)…`, 'success');
+                        log('sender-log', `All symbols transmitted. Waiting for final decode verdict (timeout: ${Math.round(timeout/1000)}s)...`, 'success');
                         
                         sDecodeTimer = setTimeout(() => {
                             if (sState === 'AWAIT_DECODE') {
-                                log('sender-log', 'Final decode timeout — connection broken. Restarting from SYN…', 'warn');
+                                log('sender-log', 'Final decode timeout. Restarting from calibration...', 'warn');
                                 doFullRestart();
                             }
                         }, timeout);
                     } else {
-                        log('sender-log', `  Symbol ${sSymIdx} ACK'd (RTT=${measuredRtt}ms). Advancing…`, 'success');
+                        log('sender-log', `Symbol ${sSymIdx} acknowledged (RTT: ${measuredRtt}ms).`, 'success');
                         setSenderState('SYM_GAP');
-                        setTimeout(doTransmitNextSymbol, 500); // 500ms deaf window
+                        setTimeout(doTransmitNextSymbol, 500);
                     }
                 }
                 break;
 
             case 'SYM_GAP':
-                // Deaf period: ignore tones to prevent echo re-trigger
                 break;
 
             case 'AWAIT_DECODE':
@@ -286,12 +260,12 @@
                     setSenderState('DONE');
                     TX.drawIdle();
                     sSeq ^= 1;
-                    log('sender-log', 'Final ACK received — transmission verified successfully!', 'success');
+                    log('sender-log', 'Final ACK received - transmission complete and verified!', 'success');
                     setTimeout(() => {
                         if (sState === 'DONE') setSenderState('IDLE');
                     }, 3000);
                 } else if (tone === 'NACK') {
-                    log('sender-log', 'NACK received — receiver requested retransmission. Restarting from SYN…', 'warn');
+                    log('sender-log', 'NACK received - receiver requested retransmission.', 'warn');
                     doFullRestart();
                 }
                 break;
@@ -304,9 +278,8 @@
         const bits48  = Framing.buildFrame(sMsgBits, errBit, sSeq);
         sSymbols      = Framing.bitsToSymbols(bits48);
         sSymIdx       = 0;
-        log('sender-log', `Encoded ${sSymbols.length} symbols (SEQ=${sSeq}, error@bit ${errBit ?? 'none'})`);
+        log('sender-log', `Encoded frame into ${sSymbols.length} symbols (SEQ: ${sSeq}, error bit: ${errBit ?? 'none'})`);
 
-        // 300ms Pre-Frame Idle ensures Symbol 0 always produces a clean Black->White clock transition
         TX.drawIdle();
         setTimeout(doTransmitNextSymbol, 300);
     }
@@ -323,11 +296,11 @@
         sSymShowTime = Date.now();
 
         const timeout = getSenderTimeout();
-        log('sender-log', `Showing symbol ${sSymIdx + 1}/${sSymbols.length}  [${sSymbols[sSymIdx].join(',')}]  (watchdog=${Math.round(timeout / 1000)}s)`);
+        log('sender-log', `Displaying symbol ${sSymIdx + 1}/${sSymbols.length} [${sSymbols[sSymIdx].join(',')}]`);
 
         sSymTimer = setTimeout(() => {
             if (sState === 'TRANSMIT') {
-                log('sender-log', `Symbol ${sSymIdx + 1} timeout (${Math.round(timeout / 1000)}s) — link lost. Restarting from SYN…`, 'warn');
+                log('sender-log', `Symbol ${sSymIdx + 1} timeout (${Math.round(timeout / 1000)}s). Restarting...`, 'warn');
                 doFullRestart();
             }
         }, timeout);
@@ -337,7 +310,7 @@
         clearTimeout(sSymTimer);
         clearTimeout(sDecodeTimer);
         sRetransmit = true;
-        log('sender-log', '--- Retransmitting frame (no simulated error) ---', 'warn');
+        log('sender-log', 'Retransmitting frame without simulated errors...', 'warn');
         showCalibFrame();
     }
 
@@ -350,7 +323,7 @@
         document.getElementById('sender-log').innerHTML = '';
         sRetransmit  = false;
         sRttEstimate = 1500;
-        log('sender-log', 'Reset.');
+        log('sender-log', 'Sender reset.');
         validateSender();
     }
 
@@ -384,14 +357,12 @@
         }
     });
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  RECEIVER
-    // ═══════════════════════════════════════════════════════════════════════════
+    // Receiver
     let RX = null, rState = 'IDLE', rBitBuf = [], rSymCount = 0;
     let _overlayCtx = null;
 
     let rAckRetransmitTimer = null;
-    let rListenTimer        = null;   // connection timeout (10x RTT)
+    let rListenTimer        = null;
     let rLastSeenClockState = null;
     let rScreenFound        = false;
     let rRttEstimate        = 1500;
@@ -408,18 +379,18 @@
         document.getElementById('receiver-back').onclick      = () => { cleanupReceiver(); show('screen-role'); };
 
         setRxState('IDLE');
-        log('receiver-log', 'Receiver ready. Start camera to begin.');
+        log('receiver-log', 'Receiver initialized. Start camera to begin.');
     }
 
     function setRxState(st) {
         rState = st;
         const labels = {
-            IDLE:        ['IDLE',         'idle'],
-            'CAMERA ON': ['CAMERA ON',    'active'],
-            CALIBRATING: ['CALIBRATING',  'calib'],
-            LISTEN:      ['LISTENING',    'active'],
-            DECODING:    ['DECODING',     'calib'],
-            DONE:        ['DONE',         'success'],
+            IDLE:        ['IDLE',        'idle'],
+            'CAMERA ON': ['CAMERA ON',   'active'],
+            CALIBRATING: ['CALIBRATING', 'calib'],
+            LISTEN:      ['LISTENING',   'active'],
+            DECODING:    ['DECODING',    'calib'],
+            DONE:        ['DONE',        'success'],
         };
         const [text, type] = labels[st] || [st, 'idle'];
         setBadge('receiver-status-badge', text, type);
@@ -437,9 +408,9 @@
             document.getElementById('btn-calibrate').disabled = false;
             document.getElementById('camera-hint').style.display = 'none';
             setRxState('CAMERA ON');
-            log('receiver-log', 'Camera started. Aim at sender screen, then press Calibrate.');
+            log('receiver-log', 'Camera started. Frame the sender screen and press Calibrate.');
         } else {
-            log('receiver-log', 'Camera access denied.', 'error');
+            log('receiver-log', 'Unable to access camera.', 'error');
             document.getElementById('btn-start-camera').disabled = false;
         }
     }
@@ -447,24 +418,24 @@
     function startCalibration() {
         if (!RX) return;
         if (!window._cvReady) {
-            log('receiver-log', 'OpenCV not ready yet.', 'warn');
+            log('receiver-log', 'OpenCV runtime not ready yet.', 'warn');
             return;
         }
         document.getElementById('btn-calibrate').disabled = true;
         setRxState('CALIBRATING');
-        log('receiver-log', 'Sampling calibration colours (20 frames)…');
+        log('receiver-log', 'Sampling calibration reference colors (20 frames)...');
         RX.startCalibration(() => {
             log('receiver-log', 'Calibration complete.', 'success');
-            log('receiver-log', `  Clock midpoint luma: ${RX.clockMidLuma.toFixed(1)}`);
+            log('receiver-log', `Clock threshold luma: ${RX.clockMidLuma.toFixed(1)}`);
             if (RX.refColors) {
                 RX.refColors.forEach((c, i) => {
-                    log('receiver-log', `  Ref[${Framing.COLOR_NAMES[i]}]: R=${c.r.toFixed(0)} G=${c.g.toFixed(0)} B=${c.b.toFixed(0)}`);
+                    log('receiver-log', `Ref [${Framing.COLOR_NAMES[i]}]: R=${c.r.toFixed(0)} G=${c.g.toFixed(0)} B=${c.b.toFixed(0)}`);
                 });
             }
-            log('receiver-log', 'Sending READY tone…');
+            log('receiver-log', 'Transmitting READY tone...');
             rReadyTime = Date.now();
             AudioTX.playTone('READY').then(() => {
-                log('receiver-log', 'READY tone sent. Listening for transmission…');
+                log('receiver-log', 'READY tone sent. Listening for incoming symbols...');
                 startListening();
             });
         });
@@ -491,7 +462,7 @@
         const timeout = Math.max(5000, Math.min(15000, 10 * rRttEstimate));
         rListenTimer = setTimeout(() => {
             if (rState === 'LISTEN') {
-                log('receiver-log', `Listen timeout (${Math.round(timeout / 1000)}s) — no symbols received. Sending NACK…`, 'warn');
+                log('receiver-log', `Listen timeout (${Math.round(timeout / 1000)}s). Sending NACK...`, 'warn');
                 sendFinalNack();
             }
         }, timeout);
@@ -514,13 +485,13 @@
                 return;
             }
             if (!rScreenFound) {
-                log('receiver-log', 'ACK retransmit: Screen not visible. Holding…', 'warn');
+                log('receiver-log', 'ACK retransmit deferred: screen tracking lost.', 'warn');
                 return;
             }
 
-            log('receiver-log', 'ACK retransmit: Sender clock unchanged. Re-sending ACK…', 'warn');
+            log('receiver-log', 'Sender clock unchanged. Retransmitting ACK...', 'warn');
             AudioTX.playTone('ACK').then(() => {
-                log('receiver-log', '  ACK re-sent.');
+                log('receiver-log', 'ACK retransmitted.');
             });
         }, interval);
     }
@@ -537,7 +508,7 @@
             const firstRtt = Date.now() - rReadyTime;
             if (firstRtt > 0 && firstRtt < 15000) {
                 rRttEstimate = firstRtt;
-                log('receiver-log', `Initial RTT measured: ${Math.round(rRttEstimate)}ms`);
+                log('receiver-log', `Measured RTT: ${Math.round(rRttEstimate)}ms`);
             }
         }
 
@@ -550,16 +521,14 @@
 
         document.getElementById('dbg-symbols').textContent = rSymCount;
         document.getElementById('dbg-bits').textContent =
-            (rBitBuf.length > 40 ? '…' : '') + rBitBuf.slice(-40).join('');
+            (rBitBuf.length > 40 ? '...' : '') + rBitBuf.slice(-40).join('');
 
-        // Send immediate pacing ACK
         AudioTX.playTone('ACK').then(() => {
-            log('receiver-log', `  ACK sent for symbol ${rSymCount}.`);
+            log('receiver-log', `ACK sent for symbol ${rSymCount}.`);
         });
 
         startAckRetransmitTimer();
 
-        // 48 bits total = 6 symbols
         if (rBitBuf.length >= Framing.PADDED_BITS) {
             stopAckRetransmitTimer();
             stopListenTimer();
@@ -568,7 +537,7 @@
             if (result && result.L > 0 && result.L <= 20 && result.messageBits.length === result.L) {
                 handleDecodeSuccess(result);
             } else {
-                log('receiver-log', 'Frame corrupted (failed SYNC/END delimiters or parity). Sending NACK.', 'error');
+                log('receiver-log', 'Frame validation failed (delimiter/parity error). Sending NACK.', 'error');
                 sendFinalNack();
             }
         }
@@ -579,18 +548,18 @@
         stopListenTimer();
 
         if (result.seq === rLastDecodedSeq) {
-            log('receiver-log', `Duplicate frame received (SEQ=${result.seq}). Re-emitting Final ACK.`, 'warn');
+            log('receiver-log', `Duplicate frame detected (SEQ: ${result.seq}). Re-sending final ACK.`, 'warn');
         } else {
             rLastDecodedSeq = result.seq;
             setRxState('DONE');
-            log('receiver-log', `Frame decoded successfully! SEQ=${result.seq} L=${result.L} msg=${result.messageBits.join('')}`, 'success');
+            log('receiver-log', `Frame decoded: SEQ=${result.seq}, Length=${result.L}, Data=${result.messageBits.join('')}`, 'success');
 
             if (result.errorMsgBitIdx !== null) {
-                log('receiver-log', `Simulated medium error corrected at bit ${result.errorMsgBitIdx}!`, 'warn');
+                log('receiver-log', `Simulated medium error corrected at payload bit index ${result.errorMsgBitIdx}.`, 'warn');
             } else if (result.errorDataIdx !== null) {
-                log('receiver-log', 'Parity-bit error corrected (message intact).', 'warn');
+                log('receiver-log', 'Parity bit error corrected.', 'warn');
             } else {
-                log('receiver-log', 'No bit errors detected.');
+                log('receiver-log', 'Zero transmission errors detected.');
             }
 
             showResult(result);
@@ -598,7 +567,7 @@
 
         setTimeout(() => {
             AudioTX.playTone('ACK').then(() => {
-                log('receiver-log', 'Final ACK sent — ready for next transmission.');
+                log('receiver-log', 'Final ACK sent. Ready for next transmission.');
                 rBitBuf = []; rSymCount = 0;
                 if (RX) RX.resetClock();
                 setRxState('LISTEN');
@@ -623,14 +592,14 @@
                     : `${b}`;
             });
             msgEl.innerHTML = html;
-            errEl.textContent = `Bit ${errIdx} (0-indexed) was in error on medium and was corrected in-place.`;
+            errEl.textContent = `Bit ${errIdx} (0-indexed) was corrupted on medium and corrected in-place.`;
             errEl.className   = 'rx-err-info error';
         } else {
             msgEl.textContent = bits.join('');
-            errEl.textContent  = 'No error detected (transmission clean).';
+            errEl.textContent  = 'No error detected (clean transmission).';
             errEl.className    = 'rx-err-info ok';
         }
-        metaEl.textContent = `Length: ${bits.length} bit${bits.length !== 1 ? 's' : ''}  |  Symbols: ${rSymCount}`;
+        metaEl.textContent = `Length: ${bits.length} bit${bits.length !== 1 ? 's' : ''} | Symbols: ${rSymCount}`;
     }
 
     function sendFinalNack() {
@@ -638,7 +607,7 @@
         stopListenTimer();
         setRxState('DECODING');
         AudioTX.playTone('NACK').then(() => {
-            log('receiver-log', 'NACK sent. Resetting for retransmission…', 'warn');
+            log('receiver-log', 'NACK sent. Waiting for sender restart...', 'warn');
             rBitBuf = []; rSymCount = 0;
             rLastSeenClockState = null;
             if (RX) RX.resetClock();
@@ -650,12 +619,12 @@
     function updateDebugPanel(info) {
         rScreenFound = info.screenFound;
         document.getElementById('dbg-markers').textContent =
-            rScreenFound ? '4/4 detected' : `searching… (${info.candidateCount || 0} candidates)`;
+            rScreenFound ? '4/4 detected' : `searching... (${info.candidateCount || 0} candidates)`;
 
         if (info.clockState !== undefined) {
-            const pending  = info.newSymbol ? ' ★ SYMBOL' : (info.cooldown > 0 ? ` [cd:${info.cooldown}]` : '');
+            const pending  = info.newSymbol ? ' [NEW SYM]' : (info.cooldown > 0 ? ` [cd:${info.cooldown}]` : '');
             document.getElementById('dbg-clock').textContent =
-                `${info.clockState}  luma=${info.luma}  mid=${info.midLuma}${pending}`;
+                `${info.clockState} (luma: ${info.luma}, mid: ${info.midLuma})${pending}`;
             rLastSeenClockState = info.clockState;
         }
         if (info.cellColors !== undefined) {
@@ -715,7 +684,7 @@
         document.getElementById('rx-result-area').classList.add('hidden');
         document.getElementById('receiver-log').innerHTML = '';
         ['dbg-markers', 'dbg-clock', 'dbg-cells', 'dbg-rgb', 'dbg-symbols', 'dbg-bits']
-            .forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '—'; });
+            .forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '-'; });
         if (_overlayCtx) {
             const o = document.getElementById('rx-overlay');
             _overlayCtx.clearRect(0, 0, o.width, o.height);
@@ -724,7 +693,7 @@
             RX.reset();
             document.getElementById('btn-calibrate').disabled = false;
         }
-        log('receiver-log', 'Reset. Press Calibrate to restart.');
+        log('receiver-log', 'Receiver reset. Press Calibrate to restart.');
     }
 
     function cleanupReceiver() {
@@ -733,23 +702,21 @@
         if (RX) RX.stop();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  DIAGNOSTICS & DEBUG LAB
-    // ═══════════════════════════════════════════════════════════════════════════
+    // Diagnostics
     let debugAudioRX = null, debugRX = null, _dbgWarpCtx = null, _dbgWarpTimer = null;
 
     function initDebugLab() {
         document.getElementById('btn-dbg-ready').onclick = () => {
             AudioTX.playTone('READY');
-            log('debug-log', 'Playing READY (1150+1450 Hz, 400 ms)');
+            log('debug-log', 'Emitting READY (1150+1450 Hz, 400 ms)');
         };
         document.getElementById('btn-dbg-ack').onclick = () => {
             AudioTX.playTone('ACK');
-            log('debug-log', 'Playing ACK (1750+2150 Hz, 300 ms)');
+            log('debug-log', 'Emitting ACK (1750+2150 Hz, 300 ms)');
         };
         document.getElementById('btn-dbg-nack').onclick = () => {
             AudioTX.playTone('NACK');
-            log('debug-log', 'Playing NACK (2550+2950 Hz, 450 ms)');
+            log('debug-log', 'Emitting NACK (2550+2950 Hz, 450 ms)');
         };
 
         const btnStart = document.getElementById('btn-dbg-listen-start');
@@ -775,9 +742,9 @@
             if (ok) {
                 btnStart.disabled = true;
                 btnStop.disabled  = false;
-                log('debug-log', 'Mic detector started.');
+                log('debug-log', 'Acoustic detector started.');
             } else {
-                log('debug-log', 'Mic start failed.', 'error');
+                log('debug-log', 'Failed to start acoustic detector.', 'error');
             }
         };
 
@@ -785,7 +752,7 @@
             if (debugAudioRX) { debugAudioRX.stop(); debugAudioRX = null; }
             btnStart.disabled = false;
             btnStop.disabled  = true;
-            log('debug-log', 'Detector stopped.');
+            log('debug-log', 'Acoustic detector stopped.');
         };
 
         const btnCamStart = document.getElementById('btn-dbg-cam-start');
@@ -803,7 +770,7 @@
                 btnCamStart.disabled = true;
                 btnCamStop.disabled  = false;
                 if (btnDbgCalib) btnDbgCalib.disabled = false;
-                log('debug-log', 'Debug camera started.');
+                log('debug-log', 'Camera diagnostics started.');
 
                 _dbgWarpTimer = setInterval(() => {
                     if (!debugRX) return;
@@ -819,7 +786,7 @@
                     }
                 }, 60);
             } else {
-                log('debug-log', 'Camera start failed.', 'error');
+                log('debug-log', 'Camera startup failed.', 'error');
             }
         };
 
@@ -827,14 +794,14 @@
             btnDbgCalib.onclick = () => {
                 if (!debugRX) return;
                 btnDbgCalib.disabled = true;
-                log('debug-log', 'Sampling 20 calibration frames in debug mode…');
+                log('debug-log', 'Sampling 20 calibration frames...');
                 debugRX.startCalibration(() => {
                     btnDbgCalib.disabled = false;
-                    log('debug-log', 'Debug calibration complete!', 'success');
-                    log('debug-log', `Clock midpoint luma: ${debugRX.clockMidLuma.toFixed(1)}`);
+                    log('debug-log', 'Calibration sampling complete.', 'success');
+                    log('debug-log', `Clock threshold luma: ${debugRX.clockMidLuma.toFixed(1)}`);
                     if (debugRX.refColors) {
                         debugRX.refColors.forEach((c, i) => {
-                            log('debug-log', `  Ref[${Framing.COLOR_NAMES[i]}]: R=${c.r.toFixed(0)} G=${c.g.toFixed(0)} B=${c.b.toFixed(0)}`);
+                            log('debug-log', `Ref [${Framing.COLOR_NAMES[i]}]: R=${c.r.toFixed(0)} G=${c.g.toFixed(0)} B=${c.b.toFixed(0)}`);
                         });
                     }
                 });
@@ -847,7 +814,7 @@
             btnCamStart.disabled = false;
             btnCamStop.disabled  = true;
             if (btnDbgCalib) btnDbgCalib.disabled = true;
-            log('debug-log', 'Debug camera stopped.');
+            log('debug-log', 'Camera diagnostics stopped.');
         };
 
         document.getElementById('debug-back').onclick = () => {
@@ -896,12 +863,12 @@
             }
         }
 
-        el('dbg-v-markers').textContent = info.screenFound ? 'Locked (4/4)' : 'Searching…';
-        el('dbg-v-candidates').textContent = `${info.candidateCount || 0} candidates  |  ${info.fps || 0} fps`;
+        el('dbg-v-markers').textContent = info.screenFound ? 'Locked (4/4)' : 'Searching...';
+        el('dbg-v-candidates').textContent = `${info.candidateCount || 0} candidates | ${info.fps || 0} fps`;
 
         if (info.clockState !== undefined) {
-            const pending = info.newSymbol ? ' ★ SYMBOL' : (info.cooldown > 0 ? ` [cooldown:${info.cooldown}]` : '');
-            el('dbg-v-clock').textContent = `${info.clockState === 'B' ? 'BLACK' : 'WHITE'} (luma=${info.luma}, mid=${info.midLuma})${pending}`;
+            const pending = info.newSymbol ? ' [NEW SYM]' : (info.cooldown > 0 ? ` [cd:${info.cooldown}]` : '');
+            el('dbg-v-clock').textContent = `${info.clockState === 'B' ? 'BLACK' : 'WHITE'} (luma: ${info.luma}, mid: ${info.midLuma})${pending}`;
         }
 
         if (info.cellColors !== undefined) {
@@ -933,9 +900,6 @@
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  ROUTING
-    // ═══════════════════════════════════════════════════════════════════════════
     document.getElementById('btn-role-sender').onclick = () => {
         show('screen-sender');
         initSender();

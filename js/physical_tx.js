@@ -30,28 +30,23 @@
             const ctx = this.ctx;
             const { S, pad, act, mS, ckS, cS } = this._dim();
 
-            // ── Background: medium grey — neutral hue, never trips the magenta detector
             ctx.fillStyle = '#808080';
             ctx.fillRect(0, 0, S, S);
 
-            // ── Finder markers (MAGENTA — unique hue, absent from natural scenes) ─
             ctx.fillStyle = '#FF00FF';
-            ctx.fillRect(pad,              pad,              mS, mS);   // TL
-            ctx.fillRect(pad + act - mS,   pad,              mS, mS);   // TR
-            ctx.fillRect(pad,              pad + act - mS,   mS, mS);   // BL
-            ctx.fillRect(pad + act - mS,   pad + act - mS,   mS, mS);  // BR
+            ctx.fillRect(pad,            pad,            mS, mS);
+            ctx.fillRect(pad + act - mS, pad,            mS, mS);
+            ctx.fillRect(pad,            pad + act - mS, mS, mS);
+            ctx.fillRect(pad + act - mS, pad + act - mS, mS, mS);
 
-            // ── Clock cell (centred between TL and TR markers) ───────────────
             const ckX = pad + act / 2 - ckS / 2;
             const ckY = pad + mS + LO.CLOCK_GAP;
             ctx.fillStyle = this.clockState ? '#FFFFFF' : '#000000';
             ctx.fillRect(ckX, ckY, ckS, ckS);
-            // Outline clock cell so white clock is visible on white bg
             ctx.strokeStyle = '#000000';
             ctx.lineWidth = 2;
             ctx.strokeRect(ckX, ckY, ckS, ckS);
 
-            // ── Data grid (2×2, centred) ─────────────────────────────────────
             const gX = pad + act / 2 - cS;
             const gY = pad + act / 2 - cS;
 
@@ -61,7 +56,6 @@
                     const cy = gY + Math.floor(i / 2) * cS;
                     ctx.fillStyle = CELL_HEX[cells[i]] || '#FFFFFF';
                     ctx.fillRect(cx, cy, cS, cS);
-                    // Black outline so white cells are distinguishable from bg
                     ctx.strokeStyle = '#000000';
                     ctx.lineWidth = 2;
                     ctx.strokeRect(cx, cy, cS, cS);
@@ -85,11 +79,6 @@
             this._draw([0, 1, 2, 3]);
         }
 
-        /**
-         * Show a single symbol: toggle clock, draw the 4-cell data.
-         * Used by main.js for stop-and-wait per-symbol transmission.
-         * @param {number[]} cells – [TL, TR, BL, BR] color indices
-         */
         showSymbol(cells) {
             this.clockState = !this.clockState;
             this._draw(cells);

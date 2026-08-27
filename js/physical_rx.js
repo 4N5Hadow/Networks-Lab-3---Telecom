@@ -1,29 +1,25 @@
 'use strict';
 (function () {
     const LO = window.LAYOUT;
-    const CS = LO.CANON_SIZE;  // 400
+    const CS = LO.CANON_SIZE;
 
     class PhysicalRX {
         constructor(video) {
             this.video   = video;
             this.running = false;
 
-            // Calibration
             this.calibrated   = false;
             this.refColors    = null;
             this.clockMidLuma = 128;
 
-            // Clock debounce
             this.lastClockState  = 'B';
             this._debounce       = [];
-            this.K               = 3;   // 3 frames agreement for fast, reliable transition
-            this._symbolCooldown = 0;   // frames to skip after a symbol fires
-            this.COOLDOWN_FRAMES = 4;   // minimum gap between symbols
+            this.K               = 3;
+            this._symbolCooldown = 0;
+            this.COOLDOWN_FRAMES = 4;
 
-            // Marker detection params (magenta HSV hue-range; area limits are in _extractCandidates)
-            this.DS_W = 640;  // downsample width for detection pass
+            this.DS_W = 640;
 
-            // Internal canvases
             this._capCanvas    = document.createElement('canvas');
             this._capCtx       = this._capCanvas.getContext('2d', { willReadFrequently: true });
             this._warpCanvas   = Object.assign(document.createElement('canvas'), { width: CS, height: CS });
@@ -31,7 +27,6 @@
             this._binaryCanvas = document.createElement('canvas');
             this._binaryCtx    = this._binaryCanvas.getContext('2d', { willReadFrequently: true });
 
-            // Calibration accumulation
             this._calibrating  = false;
             this._calibSamples = [];
             this._calibDone    = null;
@@ -39,7 +34,6 @@
             this._stream = null;
             this._raf    = null;
 
-            // Quad tracking & temporal smoothing
             this._lastQuad           = null;
             this._lostQuadFrames     = 0;
             this._MAX_LOST_FRAMES    = 3;
@@ -48,12 +42,9 @@
             this._lastFps            = 0;
             this._lastFrameTime      = performance.now();
 
-            // Callbacks
             this.onNewSymbol = null;
             this.onDebug     = null;
         }
-
-        // ── Camera ───────────────────────────────────────────────────────────
 
         async start() {
             try {
@@ -85,17 +76,13 @@
             if (this._stream) this._stream.getTracks().forEach(t => t.stop());
         }
 
-        /** Get the internal warped canvas (400×400) for debug display. */
         getWarpedCanvas() {
             return this._lastWarpOk ? this._warpCanvas : null;
         }
 
-        /** Get the internal thresholded binary canvas for debug display. */
         getBinaryCanvas() {
             return this._binaryCanvas;
         }
-
-        // ── Frame loop ───────────────────────────────────────────────────────
 
         _loop() {
             if (!this.running) return;
@@ -119,18 +106,15 @@
             const VW = this.video.videoWidth, VH = this.video.videoHeight;
             if (!VW || !VH) return;
 
-            // Downsample for detection
             const dsH = Math.round(this.DS_W * VH / VW);
             this._capCanvas.width  = this.DS_W;
             this._capCanvas.height = dsH;
             this._capCtx.drawImage(this.video, 0, 0, this.DS_W, dsH);
 
-            // Detect 4 finder markers
             const quad = this._findMarkers(this.DS_W, dsH);
 
             let activeQuad = null;
             if (quad) {
-                // Scale from downsample space to native video space
                 const sx = VW / this.DS_W, sy = VH / dsH;
                 const fullQuad = {
                     TL: { x: quad.TL.x * sx, y: quad.TL.y * sy },
@@ -139,7 +123,6 @@
                     BR: { x: quad.BR.x * sx, y: quad.BR.y * sy },
                 };
 
-                // Temporal smoothing (alpha = 0.55 — track changes faster)
                 if (this._lastQuad) {
                     const a = 0.55, b = 1 - a;
                     this._lastQuad = {
@@ -167,12 +150,10 @@
                 return;
             }
 
-            // Full-res capture for warp
             this._capCanvas.width  = VW;
             this._capCanvas.height = VH;
             this._capCtx.drawImage(this.video, 0, 0, VW, VH);
 
-            // Warp
             if (!this._warpPerspective(activeQuad, VW, VH)) {
                 this._lastWarpOk = false;
                 return;
@@ -181,7 +162,6 @@
 
             const warpedData = this._warpCtx.getImageData(0, 0, CS, CS);
 
-            // Calibration
             if (this._calibrating) {
                 this._accumCalib(warpedData);
                 if (this.onDebug) this.onDebug({
@@ -193,7 +173,6 @@
                 return;
             }
 
-            // Sample clock with hysteresis around clockMidLuma
             const ck    = LO.CANON_CLOCK;
             const ckRgb = this._trimmedMean(warpedData.data, CS, CS, ck.x, ck.y, ck.hw);
             const luma  = 0.299 * ckRgb.r + 0.587 * ckRgb.g + 0.114 * ckRgb.b;
@@ -205,16 +184,12 @@
                 if (luma < this.clockMidLuma - hyst) ckSt = 'B';
             }
 
-            // Tick down symbol cooldown counter
             if (this._symbolCooldown > 0) this._symbolCooldown--;
 
-            // Sample data cells every frame
             const rawCellRgb = LO.CANON_CELLS.map(c =>
                 this._trimmedMean(warpedData.data, CS, CS, c.x, c.y, c.hw));
             const cellColors = rawCellRgb.map(rgb => this._classify(rgb));
 
-            // ── K-frame debounce & immediate stable symbol capture ───────────
-            // After K consecutive frames in the new state, the screen has already settled.
             let newSymbol = false;
             this._debounce.push(ckSt);
             if (this._debounce.length > this.K) this._debounce.shift();
@@ -253,12 +228,7 @@
             if (newSymbol && this.onNewSymbol) this.onNewSymbol([...cellColors]);
         }
 
-        // ── Marker detection ─────────────────────────────────────────────────────
-
         _findMarkers(W, H) {
-            // Detect MAGENTA (#FF00FF) finder markers via differential chromaticity.
-            // Magenta has high R and high B relative to G (R >> G and B >> G).
-            // This is immune to brightness shifts, camera exposure changes, and Bayer bleed.
             let src = null, rgb = null;
             let rCh = null, gCh = null, bCh = null, rgbChans = null;
             let diffRG = null, diffBG = null, maskRG = null, maskBG = null;
@@ -269,9 +239,8 @@
 
             try {
                 const imgData = this._capCtx.getImageData(0, 0, W, H);
-                src = cv.matFromImageData(imgData); // RGBA
+                src = cv.matFromImageData(imgData);
 
-                // ── Pass 1: Magenta Differential Chromaticity ─────────────────────
                 rgb = new cv.Mat();
                 cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
 
@@ -290,22 +259,20 @@
                 maskBG = new cv.Mat();
                 maskR  = new cv.Mat();
                 maskB  = new cv.Mat();
-                cv.threshold(diffRG, maskRG, 25, 255, cv.THRESH_BINARY); // R significantly > G
-                cv.threshold(diffBG, maskBG, 25, 255, cv.THRESH_BINARY); // B significantly > G
-                cv.threshold(rCh,    maskR,  70, 255, cv.THRESH_BINARY); // R is bright
-                cv.threshold(bCh,    maskB,  70, 255, cv.THRESH_BINARY); // B is bright
+                cv.threshold(diffRG, maskRG, 25, 255, cv.THRESH_BINARY);
+                cv.threshold(diffBG, maskBG, 25, 255, cv.THRESH_BINARY);
+                cv.threshold(rCh,    maskR,  70, 255, cv.THRESH_BINARY);
+                cv.threshold(bCh,    maskB,  70, 255, cv.THRESH_BINARY);
 
                 mask = new cv.Mat();
                 cv.bitwise_and(maskRG, maskBG, mask);
                 cv.bitwise_and(mask,   maskR,  mask);
                 cv.bitwise_and(mask,   maskB,  mask);
 
-                // Morphological close to heal JPEG compression artefacts in marker
                 kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
                 closed = new cv.Mat();
                 cv.morphologyEx(mask, closed, cv.MORPH_CLOSE, kernel);
 
-                // Export binary mask for debug view
                 this._binaryCanvas.width  = W;
                 this._binaryCanvas.height = H;
                 cv.imshow(this._binaryCanvas, closed);
@@ -316,7 +283,6 @@
 
                 let candidates = this._extractCandidates(contours, W, H);
 
-                // ── Pass 2 fallback: adaptive-threshold on grayscale ──────────────
                 if (candidates.length < 4) {
                     gray = new cv.Mat();
                     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
@@ -363,11 +329,8 @@
 
         _extractCandidates(contours, W, H) {
             const imgArea = W * H;
-            // Markers are ~8% of the sender canvas width/height in each dimension,
-            // so roughly 0.5%–2% of image area when the screen fills a reasonable
-            // portion of the camera frame. Cap max at 8% to reject massive blobs.
-            const minArea = imgArea * 0.0003;  // 0.03% of image
-            const maxArea = imgArea * 0.08;    // 8% of image
+            const minArea = imgArea * 0.0003;
+            const maxArea = imgArea * 0.08;
             const candidates = [];
 
             for (let i = 0; i < contours.size(); i++) {
@@ -377,7 +340,6 @@
                 if (area >= minArea && area <= maxArea) {
                     const peri   = cv.arcLength(cnt, true);
                     const approx = new cv.Mat();
-                    // Tighter epsilon so we only accept actually square/rectangular shapes
                     cv.approxPolyDP(cnt, approx, 0.05 * peri, true);
 
                     const rect     = cv.boundingRect(cnt);
@@ -386,10 +348,6 @@
                     const asp      = Math.min(rect.width, rect.height) /
                                      (Math.max(rect.width, rect.height) || 1);
 
-                    // Strict shape filters:
-                    //  - polygon vertex count 4–6 (quad or nearly-quad)
-                    //  - fill ≥ 0.55  (solid, not a ring or irregular blob)
-                    //  - aspect ≥ 0.50 (not a very elongated stripe)
                     const isQuadLike = approx.rows >= 4 && approx.rows <= 6;
 
                     if (isQuadLike && fill >= 0.55 && asp >= 0.50) {
@@ -412,10 +370,8 @@
         }
 
         _selectBestQuad(candidates, W, H) {
-            const imgArea = W * H;
-            // Sort by descending area so we try the largest (most likely full markers) first
             const sorted = candidates.slice().sort((a, b) => b.area - a.area);
-            const pool   = sorted.slice(0, 10); // consider top 10 only
+            const pool   = sorted.slice(0, 10);
             if (pool.length < 4) return null;
 
             if (pool.length === 4) {
@@ -443,14 +399,10 @@
                             const avgW = (topW + botW) / 2;
                             const avgH = (lftH + rgtH) / 2;
 
-                            // Aspect ratio of enclosing quad (sender screen is square)
                             const aspect = Math.min(avgW, avgH) / Math.max(avgW, avgH);
-
-                            // Parallelism (opposite sides should be similar length)
                             const parW = Math.min(topW, botW) / Math.max(topW, botW);
                             const parH = Math.min(lftH, rgtH) / Math.max(lftH, rgtH);
 
-                            // Marker size consistency
                             const areas    = pts.map(p => p.area);
                             const maxA     = Math.max(...areas), minA = Math.min(...areas);
                             const areaRatio = minA / (maxA || 1);
@@ -473,14 +425,6 @@
             return bestQuad;
         }
 
-        /**
-         * Validate that the four corner points form a plausible screen quad:
-         *   1. Not too small (> 1.5% of image area)
-         *   2. Not too large (< 65% of image area)
-         *   3. Aspect ratio ≥ 0.40 (not a very skewed sliver)
-         *   4. Both pairs of opposite sides within 35% of each other (parallelism)
-         *   5. Diagonals within 40% of each other (not a very lopsided kite)
-         */
         _isValidQuad(quad, W, H) {
             const imgArea = W * H;
             const topW = Math.hypot(quad.TR.x - quad.TL.x, quad.TR.y - quad.TL.y);
@@ -494,18 +438,18 @@
             const avgH    = (lftH + rgtH) / 2;
             const quadArea = avgW * avgH;
 
-            if (quadArea < imgArea * 0.005) return false;  // too small (< 0.5% image)
-            if (quadArea > imgArea * 0.70)  return false;  // too large (> 70% image)
+            if (quadArea < imgArea * 0.005) return false;
+            if (quadArea > imgArea * 0.70)  return false;
 
             const aspect = Math.min(avgW, avgH) / (Math.max(avgW, avgH) || 1);
-            if (aspect < 0.40) return false;               // very skewed sliver
+            if (aspect < 0.40) return false;
 
             const parW = Math.min(topW, botW) / (Math.max(topW, botW) || 1);
             const parH = Math.min(lftH, rgtH) / (Math.max(lftH, rgtH) || 1);
-            if (parW < 0.50 || parH < 0.50) return false; // sides not parallel enough
+            if (parW < 0.50 || parH < 0.50) return false;
 
             const diagRatio = Math.min(d1, d2) / (Math.max(d1, d2) || 1);
-            if (diagRatio < 0.55) return false;            // very lopsided kite
+            if (diagRatio < 0.55) return false;
 
             return true;
         }
@@ -532,13 +476,11 @@
             const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
             const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
 
-            // Sort all 4 points by polar angle relative to centroid
             const sortedByAngle = pts.map(p => ({
                 p,
                 angle: Math.atan2(p.y - cy, p.x - cx),
             })).sort((a, b) => a.angle - b.angle).map(item => item.p);
 
-            // Find the point with minimum (x + y) as Top-Left (TL)
             let tlIdx = 0, minSum = Infinity;
             for (let i = 0; i < sortedByAngle.length; i++) {
                 const sum = sortedByAngle[i].x + sortedByAngle[i].y;
@@ -548,30 +490,24 @@
                 }
             }
 
-            // Rotate array so TL is at index 0
             const Q = [];
             for (let i = 0; i < 4; i++) {
                 Q.push(sortedByAngle[(tlIdx + i) % 4]);
             }
 
-            // Verify orientation using signed cross product of (Q1 - Q0) x (Q3 - Q0)
             const dx1 = Q[1].x - Q[0].x, dy1 = Q[1].y - Q[0].y;
             const dx2 = Q[3].x - Q[0].x, dy2 = Q[3].y - Q[0].y;
             const cross = dx1 * dy2 - dy1 * dx2;
 
             let TL, TR, BR, BL;
             if (cross > 0) {
-                // Clockwise order: Q0=TL, Q1=TR, Q2=BR, Q3=BL
                 TL = Q[0]; TR = Q[1]; BR = Q[2]; BL = Q[3];
             } else {
-                // Counter-Clockwise order: Q0=TL, Q1=BL, Q2=BR, Q3=TR
                 TL = Q[0]; TR = Q[3]; BR = Q[2]; BL = Q[1];
             }
 
             return { TL, TR, BR, BL };
         }
-
-        // ── Warp ─────────────────────────────────────────────────────────────
 
         _warpPerspective(quad, VW, VH) {
             let src = null, srcPts = null, dstPts = null, M = null, dst = null;
@@ -606,8 +542,6 @@
                 src?.delete(); srcPts?.delete(); dstPts?.delete(); M?.delete(); dst?.delete();
             }
         }
-
-        // ── Calibration ──────────────────────────────────────────────────────
 
         startCalibration(onDone) {
             this._calibSamples = [];
@@ -650,8 +584,6 @@
             }
         }
 
-        // ── Pixel helpers & Hybrid Classifier ────────────────────────────────
-
         _trimmedMean(pixels, W, H, cx, cy, hw) {
             const x0 = Math.max(0, Math.round(cx - hw));
             const x1 = Math.min(W - 1, Math.round(cx + hw));
@@ -670,7 +602,6 @@
 
             if (!samples.length) return { r: 0, g: 0, b: 0 };
 
-            // Trim top 8% and bottom 8% by luminance to eliminate glare or borders
             samples.sort((a, b) => a.luma - b.luma);
             const trim = Math.floor(samples.length * 0.08);
             const valid = samples.slice(trim, samples.length - trim);
@@ -688,16 +619,13 @@
             const maxVal = Math.max(R, G, B), minVal = Math.min(R, G, B);
             const sat = maxVal > 0 ? (maxVal - minVal) / maxVal : 0;
 
-            // 1. Clear White: low saturation
-            if (sat < 0.22 && I > 150) return 0; // WHITE
+            if (sat < 0.22 && I > 150) return 0;
 
-            // 2. High confidence channel dominance (immune to AWB)
-            if (rNorm > 0.44 && R > G + 20 && R > B + 20) return 1; // RED
-            if (gNorm > 0.40 && G > R + 15 && G > B + 15) return 2; // GREEN
-            if (bNorm > 0.40 && B > R + 15 && B > G + 15) return 3; // BLUE
+            if (rNorm > 0.44 && R > G + 20 && R > B + 20) return 1;
+            if (gNorm > 0.40 && G > R + 15 && G > B + 15) return 2;
+            if (bNorm > 0.40 && B > R + 15 && B > G + 15) return 3;
 
             if (this.refColors && this.refColors.length === 4) {
-                // Calibrated classifier in Hybrid Chromaticity + Saturation + Normalized RGB space
                 let bestIdx = 0, bestDist = Infinity;
 
                 for (let i = 0; i < 4; i++) {
@@ -707,20 +635,16 @@
                     const refMax = Math.max(ref.r, ref.g, ref.b), refMin = Math.min(ref.r, ref.g, ref.b);
                     const refSat = refMax > 0 ? (refMax - refMin) / refMax : 0;
 
-                    // Chromaticity distance
                     const dChroma = (rNorm - rRef) ** 2 + (gNorm - gRef) ** 2 + (bNorm - bRef) ** 2;
-                    // Saturation distance
                     const dSat = (sat - refSat) ** 2;
-                    // Intensity-normalized RGB distance
                     const dRgb = ((R - ref.r) / 255) ** 2 + ((G - ref.g) / 255) ** 2 + ((B - ref.b) / 255) ** 2;
 
                     let dist = dChroma * 5.0 + dSat * 2.5 + dRgb * 1.0;
 
-                    // Domain heuristics
-                    if (i === 0 && sat < 0.25) dist *= 0.6; // White boost
-                    if (i === 1 && rNorm > 0.38 && R > G) dist *= 0.7; // Red boost
-                    if (i === 2 && gNorm > 0.36 && G > R) dist *= 0.7; // Green boost
-                    if (i === 3 && bNorm > 0.36 && B > R) dist *= 0.7; // Blue boost
+                    if (i === 0 && sat < 0.25) dist *= 0.6;
+                    if (i === 1 && rNorm > 0.38 && R > G) dist *= 0.7;
+                    if (i === 2 && gNorm > 0.36 && G > R) dist *= 0.7;
+                    if (i === 3 && bNorm > 0.36 && B > R) dist *= 0.7;
 
                     if (dist < bestDist) {
                         bestDist = dist;
@@ -730,11 +654,10 @@
                 return bestIdx;
             }
 
-            // Uncalibrated fallback: Direct Chromaticity & Channel Dominance
-            if (sat < 0.25) return 0; // WHITE
-            if (R >= G && R >= B) return 1; // RED
-            if (G >= R && G >= B) return 2; // GREEN
-            return 3; // BLUE
+            if (sat < 0.25) return 0;
+            if (R >= G && R >= B) return 1;
+            if (G >= R && G >= B) return 2;
+            return 3;
         }
 
         resetClock() {
