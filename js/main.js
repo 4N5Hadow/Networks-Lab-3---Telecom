@@ -258,7 +258,7 @@
 
     function doEncode() {
         setSenderState('ENCODE');
-        const errBit  = sRetransmit ? null : sErrBit;
+        const errBit  = sErrBit;
         const bits48  = Framing.buildFrame(sMsgBits, errBit, sSeq);
         sSymbols      = Framing.bitsToSymbols(bits48);
         sSymIdx       = 0;
@@ -294,7 +294,7 @@
         clearTimeout(sSymTimer);
         clearTimeout(sDecodeTimer);
         sRetransmit = true;
-        log('sender-log', 'Retransmitting frame without simulated errors...', 'warn');
+        log('sender-log', 'Retransmitting frame...', 'warn');
         showCalibFrame();
     }
 
@@ -352,6 +352,7 @@
     let rRttEstimate        = 1500;
     let rReadyTime          = 0;
     let rLastDecodedSeq     = null;
+    let rCalibFrames        = 0;
 
     function initReceiver() {
         RX = null; rState = 'IDLE'; rBitBuf = []; rSymCount = 0;
@@ -606,6 +607,25 @@
         }
         if (info.cellColors !== undefined) {
             document.getElementById('dbg-cells').textContent = info.cellColors.join(' ');
+
+            if ((rState === 'CAMERA ON' || rState === 'DONE') && info.screenFound) {
+                const isCalib = info.cellColors[0] === 'WHITE' &&
+                                info.cellColors[1] === 'RED' &&
+                                info.cellColors[2] === 'GREEN' &&
+                                info.cellColors[3] === 'BLUE';
+                if (isCalib) {
+                    rCalibFrames++;
+                    if (rCalibFrames >= 5) {
+                        rCalibFrames = 0;
+                        log('receiver-log', 'Calibration pattern detected on screen. Auto-calibrating...');
+                        startCalibration();
+                    }
+                } else {
+                    rCalibFrames = 0;
+                }
+            } else {
+                rCalibFrames = 0;
+            }
         }
         if (info.cellRgb !== undefined) {
             const el = document.getElementById('dbg-rgb');
