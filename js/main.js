@@ -232,42 +232,26 @@
 
                     sSymIdx++;
                     if (sSymIdx >= sSymbols.length) {
-                        setSenderState('AWAIT_DECODE');
+                        setSenderState('DONE');
                         TX.drawIdle();
-                        const timeout = getSenderTimeout();
-                        log('sender-log', `All symbols transmitted. Waiting for final decode verdict (timeout: ${Math.round(timeout/1000)}s)...`, 'success');
-                        
-                        sDecodeTimer = setTimeout(() => {
-                            if (sState === 'AWAIT_DECODE') {
-                                log('sender-log', 'Final decode timeout. Restarting from calibration...', 'warn');
-                                doFullRestart();
-                            }
-                        }, timeout);
+                        sSeq ^= 1;
+                        log('sender-log', 'Final symbol acknowledged & frame verified! Transmission complete.', 'success');
+                        setTimeout(() => {
+                            if (sState === 'DONE') setSenderState('IDLE');
+                        }, 3000);
                     } else {
                         log('sender-log', `Symbol ${sSymIdx} acknowledged (RTT: ${measuredRtt}ms).`, 'success');
                         setSenderState('SYM_GAP');
                         setTimeout(doTransmitNextSymbol, 500);
                     }
+                } else if (tone === 'NACK') {
+                    clearTimeout(sSymTimer);
+                    log('sender-log', 'NACK received - receiver requested retransmission.', 'warn');
+                    doFullRestart();
                 }
                 break;
 
             case 'SYM_GAP':
-                break;
-
-            case 'AWAIT_DECODE':
-                clearTimeout(sDecodeTimer);
-                if (tone === 'ACK') {
-                    setSenderState('DONE');
-                    TX.drawIdle();
-                    sSeq ^= 1;
-                    log('sender-log', 'Final ACK received - transmission complete and verified!', 'success');
-                    setTimeout(() => {
-                        if (sState === 'DONE') setSenderState('IDLE');
-                    }, 3000);
-                } else if (tone === 'NACK') {
-                    log('sender-log', 'NACK received - receiver requested retransmission.', 'warn');
-                    doFullRestart();
-                }
                 break;
         }
     }
@@ -286,7 +270,7 @@
 
     function doTransmitNextSymbol() {
         if (sSymIdx >= sSymbols.length) {
-            setSenderState('AWAIT_DECODE');
+            setSenderState('DONE');
             TX.drawIdle();
             return;
         }
@@ -499,9 +483,6 @@
     function onNewSymbol(cells) {
         if (rState !== 'LISTEN') return;
 
-        stopAckRetransmitTimer();
-        startListenTimer();
-
         rSymCount++;
 
         if (rSymCount === 1 && rReadyTime > 0) {
@@ -523,12 +504,6 @@
         document.getElementById('dbg-bits').textContent =
             (rBitBuf.length > 40 ? '...' : '') + rBitBuf.slice(-40).join('');
 
-        AudioTX.playTone('ACK').then(() => {
-            log('receiver-log', `ACK sent for symbol ${rSymCount}.`);
-        });
-
-        startAckRetransmitTimer();
-
         if (rBitBuf.length >= Framing.PADDED_BITS) {
             stopAckRetransmitTimer();
             stopListenTimer();
@@ -540,6 +515,13 @@
                 log('receiver-log', 'Frame validation failed (delimiter/parity error). Sending NACK.', 'error');
                 sendFinalNack();
             }
+        } else {
+            stopListenTimer();
+            startListenTimer();
+            AudioTX.playTone('ACK').then(() => {
+                log('receiver-log', `ACK sent for symbol ${rSymCount}.`);
+            });
+            startAckRetransmitTimer();
         }
     }
 
@@ -548,7 +530,8 @@
         stopListenTimer();
 
         if (result.seq === rLastDecodedSeq) {
-            log('receiver-log', `Duplicate frame detected (SEQ: ${result.seq}). Re-sending final ACK.`, 'warn');
+            log('receiver-log', `Duplicate frame detected (SEQ: ${result.seq}). Sending ACK.`, 'warn');
+            AudioTX.playTone('ACK');
         } else {
             rLastDecodedSeq = result.seq;
             setRxState('DONE');
@@ -563,17 +546,12 @@
             }
 
             showResult(result);
-        }
 
-        setTimeout(() => {
             AudioTX.playTone('ACK').then(() => {
-                log('receiver-log', 'Final ACK sent. Ready for next transmission.');
-                rBitBuf = []; rSymCount = 0;
-                if (RX) RX.resetClock();
-                setRxState('LISTEN');
-                startListenTimer();
+                log('receiver-log', 'Final ACK sent. Ready for next transmission.', 'success');
+                document.getElementById('btn-calibrate').disabled = false;
             });
-        }, 500);
+        }
     }
 
     function showResult(result) {
@@ -605,14 +583,13 @@
     function sendFinalNack() {
         stopAckRetransmitTimer();
         stopListenTimer();
-        setRxState('DECODING');
+        setRxState('CAMERA ON');
         AudioTX.playTone('NACK').then(() => {
             log('receiver-log', 'NACK sent. Waiting for sender restart...', 'warn');
             rBitBuf = []; rSymCount = 0;
             rLastSeenClockState = null;
             if (RX) RX.resetClock();
             document.getElementById('btn-calibrate').disabled = false;
-            setRxState('IDLE');
         });
     }
 
