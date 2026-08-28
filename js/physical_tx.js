@@ -37,14 +37,12 @@
             ctx.fillStyle = '#808080';
             ctx.fillRect(0, 0, S, S);
 
-            // Clock indicator
             ctx.fillStyle = this.clockState ? '#FFFFFF' : '#000000';
             ctx.fillRect(ckX, ckY, ckS, ckS);
             ctx.strokeStyle = '#000000';
             ctx.lineWidth = Math.max(2, Math.round(S * 0.006));
             ctx.strokeRect(ckX, ckY, ckS, ckS);
 
-            // 2x2 Color Code Grid
             const borderW = Math.max(2, Math.round(S * 0.006));
             ctx.lineWidth = borderW;
 
