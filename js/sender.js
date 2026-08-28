@@ -32,10 +32,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function setstatus(text, type) {
-        const el = document.getElementById('sender_status');
-        if (!el) return;
-        el.textContent = text;
-        el.className = 'status ' + (type || 'idle');
+        const element = document.getElementById('sender_status');
+        if (!element) return;
+        element.textContent = text;
+        if(type){
+            element.className = 'status ' + type;
+        }
+        else{
+            element.className = 'status idle';
+        }
     }
 
     function getSenderTimeout() {

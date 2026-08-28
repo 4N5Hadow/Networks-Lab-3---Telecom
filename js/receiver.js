@@ -1,11 +1,5 @@
 'use strict';
 
-/**
- * receiver.js
- * 
- * Vanilla JS implementation of the Receiver side of the TeleCom system.
- * This version uses MANUAL input for colors (W, R, G, B) rather than camera detection.
- */
 document.addEventListener('DOMContentLoaded', () => {
     let rState = 'IDLE';
     let rBitBuf = [];
@@ -15,22 +9,26 @@ document.addEventListener('DOMContentLoaded', () => {
     let rLastDecodedSeq = null;
 
     function log(msg, type = '') {
-        const el = document.getElementById('receiver-log');
-        if (!el) return;
+        const element = document.getElementById('receiver-log');
+        if (!element) return;
         const line = document.createElement('div');
         line.className = 'log-line' + (type ? ' ' + type : '');
-        const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        line.textContent = `[${ts}] ${msg}`;
-        el.appendChild(line);
-        el.scrollTop = el.scrollHeight;
-        while (el.children.length > 80) el.removeChild(el.firstChild);
+        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        line.textContent = `[${timestamp}] ${msg}`;
+        element.appendChild(line);
+        element.scrollTop = element.scrollHeight;
     }
 
     function setstatus(text, type) {
-        const el = document.getElementById('receiver_status');
-        if (!el) return;
-        el.textContent = text;
-        el.className = 'status ' + (type || 'idle');
+        const element = document.getElementById('receiver_status');
+        if (!element) return;
+        element.textContent = text;
+        if(type){
+            element.className = 'status ' + type;
+        }
+        else{
+            element.className = 'status idle';
+        }
     }
 
     function setRxState(st) {
