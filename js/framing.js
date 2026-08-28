@@ -25,14 +25,6 @@
 
     function bitsToSymbols(bits48) {
         let allSymbols = [];
-        // for (let s = 0; s < NUM_SYMBOLS; s++) {
-        //     let symbol = [];
-        //     for (let c = 0; c < 4; c++) {
-        //         let base = s * 8 + c * 2;
-        //         symbol.push((bits48[base] << 1) | bits48[base + 1]);
-        //     }
-        //     allSymbols.push(symbol);
-        // }
         let symbol = [];
 
         for (let i = 0; i < NUM_SYMBOLS * 8; i += 2) {

@@ -1,41 +1,72 @@
 'use strict';
+
 (function () {
     const N = 30, K = 25;
-    const PARITY_SET = new Set([1, 2, 4, 8, 16]);
+    const PARITY_POS = [1, 2, 4, 8, 16];
 
     const DATA_POS = [];
-    for (let p = 1; p <= N; p++) {
-        if (!PARITY_SET.has(p)) DATA_POS.push(p);
+    for (let i = 1; i <= N; i++) {
+        if (!PARITY_POS.includes(i)) {
+            DATA_POS.push(i);
+        }
     }
 
-    const CW_TO_DATA = new Int8Array(N + 1).fill(-1);
-    DATA_POS.forEach((pos, i) => { CW_TO_DATA[pos] = i; });
+    const CW_TO_DATA = [];
+    for (let i = 0; i <= N; i++) {
+        CW_TO_DATA.push(-1);
+    }
+    for (let i = 0; i < DATA_POS.length; i++) {
+        let pos = DATA_POS[i];
+        CW_TO_DATA[pos] = i;
+    }
 
     function encode(data) {
-        if (data.length !== K) throw new Error(`Hamming.encode: expected ${K} bits, got ${data.length}`);
-        const cw = new Uint8Array(N + 1);
-        for (let i = 0; i < K; i++) cw[DATA_POS[i]] = data[i] & 1;
-        for (const p of [1, 2, 4, 8, 16]) {
+        if (data.length !== K) {
+            throw new Error('Hamming.encode: expected ' + K + ' bits, got ' + data.length);
+        }
+
+        let cw = []; // 0 added at index 0 for 1-based indexing for Hamming
+        for (let i = 0; i <= N; i++) {
+            cw.push(0);
+        }
+
+        for (let i = 0; i < K; i++) {
+            cw[DATA_POS[i]] = data[i];
+        }
+
+        for (let i = 0; i < PARITY_POS.length; i++) {
+            let p = PARITY_POS[i];
             let par = 0;
             for (let pos = 1; pos <= N; pos++) {
-                if (pos !== p && (pos & p)) par ^= cw[pos];
+                if (pos !== p && (pos & p)) {
+                    par ^= cw[pos];
+                }
             }
             cw[p] = par;
         }
-        return Array.from(cw.subarray(1));
+
+        return cw.slice(1);
     }
 
     function decode(received) {
-        if (received.length !== N) throw new Error(`Hamming.decode: expected ${N} bits, got ${received.length}`);
-        const cw = [0, ...received];
+        if (received.length !== N) {
+            throw new Error('Hamming.decode: expected ' + N + ' bits, got ' + received.length);
+        }
+
+        let cw = [0].concat(received); // 0 added at index 0 for 1-based indexing for Hamming
 
         let syndrome = 0;
-        for (const p of [1, 2, 4, 8, 16]) {
+        for (let i = 0; i < PARITY_POS.length; i++) {
+            let p = PARITY_POS[i];
             let par = 0;
             for (let pos = 1; pos <= N; pos++) {
-                if (pos & p) par ^= cw[pos];
+                if (pos & p) {
+                    par ^= cw[pos];
+                }
             }
-            if (par) syndrome += p;
+            if (par !== 0) {
+                syndrome += p;
+            }
         }
 
         let errorCwPos = null, errorDataIdx = null;
@@ -47,19 +78,23 @@
 
         const data = DATA_POS.map(p => cw[p]);
         return {
-            lengthBits:   data.slice(0, 5),
-            payloadBits:  data.slice(5),
-            errorCwPos,
-            errorDataIdx,
+            lengthBits: data.slice(0, 5),
+            payloadBits: data.slice(5),
+            errorCwPos: errorCwPos,
+            errorDataIdx: errorDataIdx,
         };
     }
 
     function injectError(codeword, msgBitIdx) {
-        if (msgBitIdx == null) return [...codeword];
-        const dataIdx = 5 + msgBitIdx;
-        if (dataIdx < 0 || dataIdx >= K) throw new Error('injectError: msgBitIdx out of range');
-        const cwPos1 = DATA_POS[dataIdx];
-        const out = [...codeword];
+        if (msgBitIdx == null) {
+            return codeword.slice();
+        }
+        let dataIdx = 5 + msgBitIdx;
+        if (dataIdx < 0 || dataIdx >= K) {
+            throw new Error('injectError: msgBitIdx out of range');
+        }
+        let cwPos1 = DATA_POS[dataIdx];
+        let out = codeword.slice();
         out[cwPos1 - 1] ^= 1;
         return out;
     }

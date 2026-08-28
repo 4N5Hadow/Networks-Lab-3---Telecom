@@ -90,7 +90,6 @@ header h2 {
   border-color: var(--success);
 }
 
-/* Common layout */
 main {
   flex: 1;
   display: flex;
@@ -101,7 +100,6 @@ section {
   padding: 1rem;
 }
 
-/* Fullscreen Dedicated Transmission View */
 #sender-tx-display-view {
   position: fixed;
   inset: 0;
@@ -175,7 +173,6 @@ input[type="text"].mono {
   letter-spacing: 1.5px;
 }
 
-/* Receiver UI */
 .cam-wrapper {
   position: relative;
   width: 100%;
@@ -200,7 +197,6 @@ input[type="text"].mono {
   object-fit: cover;
 }
 
-/* Result Box */
 #rx-result-area {
   background: var(--surf2);
   border: 1px solid var(--border);
@@ -234,7 +230,6 @@ input[type="text"].mono {
   color: var(--error);
 }
 
-/* Buttons & Logs */
 .btn-row {
   display: flex;
   gap: 0.5rem;
@@ -316,7 +311,6 @@ button.btn-nack:hover:not(:disabled) {
   border: 1px solid var(--border);
 }
 
-/* ─── UTILITY ───────────────────────────────────────────────────────────── */
 .mono {
   font-family: var(--mono);
 }
