@@ -50,14 +50,15 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('ack_btn').disabled = true;
     }
 
+    const LISTEN_TIMEOUT_MS = 15000;
+
     function startListenTimer() {
         stopListenTimer();
-        const timeout = Math.max(5000, Math.min(120000, 10 * rRttEstimate));
         rListenTimer = setTimeout(() => {
             if (rState === 'LISTEN') {
                 sendFinalNack();
             }
-        }, timeout);
+        }, LISTEN_TIMEOUT_MS);
     }
 
     function stopListenTimer() {

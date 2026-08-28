@@ -1,10 +1,5 @@
 'use strict';
 
-/**
- * sender.js
- * 
- * Vanilla JS implementation of the Sender side of the TeleCom system.
- */
 document.addEventListener('DOMContentLoaded', () => {
     let TX = null, SARX = null;
     let sState = 'IDLE';
@@ -15,12 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let sSymbols = [];
     let sSymIdx = 0;
     let sSymTimer = null;
-    let sRttEstimate = 1500;
-    let sSymShowTime = 0;
-
-    function getSenderTimeout() {
-        return Math.max(5000, Math.min(120000, 10 * sRttEstimate));
-    }
+    const TIMEOUT_MS = 10000;
 
     function showTxView() {
         const configView = document.getElementById('sender-config-view');
@@ -100,7 +90,6 @@ document.addEventListener('DOMContentLoaded', () => {
         sMsgBits = bitsStr.split('').map(Number);
         sErrBit = errVal !== '' ? parseInt(errVal, 10) : null;
         sRetransmit = false;
-        sRttEstimate = 1500;
 
         if (sErrBit !== null && (sErrBit < 0 || sErrBit >= sMsgBits.length)) {
             alert('Error bit index ' + sErrBit + ' out of range (0-' + (sMsgBits.length - 1) + ')');
@@ -133,11 +122,6 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'TRANSMIT':
                 if (tone === 'ACK') {
                     clearTimeout(sSymTimer);
-
-                    const measuredRtt = Date.now() - sSymShowTime;
-                    if (measuredRtt > 0 && measuredRtt < 15000) {
-                        sRttEstimate = 0.7 * sRttEstimate + 0.3 * measuredRtt;
-                    }
 
                     sSymIdx++;
                     if (sSymIdx >= sSymbols.length) {
@@ -173,15 +157,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         setSenderState('TRANSMIT');
         TX.showSymbol(sSymbols[sSymIdx]);
-        sSymShowTime = Date.now();
-
-        const timeout = getSenderTimeout();
 
         sSymTimer = setTimeout(() => {
             if (sState === 'TRANSMIT') {
                 doFullRestart();
             }
-        }, timeout);
+        }, TIMEOUT_MS);
     }
 
     function doFullRestart() {
@@ -207,7 +188,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (TX) TX.drawIdle();
         hideTxView();
         sRetransmit = false;
-        sRttEstimate = 1500;
         validateSender();
     }
 
