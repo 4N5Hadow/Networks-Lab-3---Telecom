@@ -4,8 +4,7 @@
  * sender.js
  * 
  * Vanilla JS implementation of the Sender side of the TeleCom system.
- * This pattern avoids frameworks and uses basic DOM manipulation,
- * similar to official WebRTC and OpenCV.js samples.
+ * This pattern avoids frameworks and uses basic DOM manipulation.
  */
 document.addEventListener('DOMContentLoaded', () => {
     let TX = null, SARX = null;
@@ -43,9 +42,38 @@ document.addEventListener('DOMContentLoaded', () => {
         return Math.max(5000, Math.min(120000, 10 * sRttEstimate));
     }
 
+    function showTxView() {
+        const configView = document.getElementById('sender-config-view');
+        const txView = document.getElementById('sender-tx-display-view');
+        if (configView) configView.classList.add('hidden');
+        if (txView) txView.classList.remove('hidden');
+        resizeCanvas();
+    }
+
+    function hideTxView() {
+        const txView = document.getElementById('sender-tx-display-view');
+        const configView = document.getElementById('sender-config-view');
+        if (txView) txView.classList.add('hidden');
+        if (configView) configView.classList.remove('hidden');
+    }
+
+    function resizeCanvas() {
+        const canvas = document.getElementById('tx-canvas');
+        if (!canvas || !TX) return;
+        const S = Math.min(window.innerWidth, window.innerHeight) * 0.94;
+        canvas.width = canvas.height = Math.floor(S);
+        if (sState === 'CALIBRATE') {
+            TX.drawCalibration();
+        } else if (sState === 'TRANSMIT' && sSymbols && sSymbols[sSymIdx]) {
+            TX.showSymbol(sSymbols[sSymIdx]);
+        } else {
+            TX.drawIdle();
+        }
+    }
+
     async function initSender() {
         const canvas = document.getElementById('tx-canvas');
-        const S = Math.min(window.innerWidth, window.innerHeight) * 0.88;
+        const S = Math.min(window.innerWidth, window.innerHeight) * 0.94;
         canvas.width = canvas.height = Math.floor(S);
 
         TX   = new PhysicalTX(canvas);
@@ -67,6 +95,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('error-bit').oninput  = validateSender;
         document.getElementById('btn-show-calib').onclick   = onSenderStart;
         document.getElementById('btn-reset-sender').onclick = resetSender;
+        
+        const exitBtn = document.getElementById('btn-exit-tx');
+        if (exitBtn) exitBtn.onclick = exitTxView;
 
         setSenderState('IDLE');
         validateSender();
@@ -117,12 +148,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function showCalibFrame() {
         setSenderState('CALIBRATE');
+        showTxView();
         TX.drawCalibration();
         log('Calibration pattern displayed. Waiting for receiver READY tone...');
     }
 
     function onSenderTone(tone) {
         log(`Detected tone: ${tone}`);
+
+        if (tone === 'NACK') {
+            clearTimeout(sSymTimer);
+            log('NACK received from receiver! Restarting from starting calibration state...', 'warn');
+            doFullRestart();
+            return;
+        }
 
         switch (sState) {
             case 'CALIBRATE':
@@ -148,17 +187,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         sSeq ^= 1;
                         log('Final symbol acknowledged & frame verified! Transmission complete.', 'success');
                         setTimeout(() => {
-                            if (sState === 'DONE') setSenderState('IDLE');
-                        }, 3000);
+                            if (sState === 'DONE') {
+                                setSenderState('IDLE');
+                                hideTxView();
+                            }
+                        }, 3500);
                     } else {
                         log(`Symbol ${sSymIdx} acknowledged (RTT: ${measuredRtt}ms).`, 'success');
                         setSenderState('SYM_GAP');
                         setTimeout(doTransmitNextSymbol, 500);
                     }
-                } else if (tone === 'NACK') {
-                    clearTimeout(sSymTimer);
-                    log('NACK received - receiver requested retransmission.', 'warn');
-                    doFullRestart();
                 }
                 break;
         }
@@ -186,7 +224,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         sSymTimer = setTimeout(() => {
             if (sState === 'TRANSMIT') {
-                log(`Symbol ${sSymIdx + 1} timeout. Restarting...`, 'warn');
+                log(`Symbol ${sSymIdx + 1} timeout. Restarting from starting calibration state...`, 'warn');
                 doFullRestart();
             }
         }, timeout);
@@ -195,28 +233,36 @@ document.addEventListener('DOMContentLoaded', () => {
     function doFullRestart() {
         clearTimeout(sSymTimer);
         sRetransmit = true;
-        log('Retransmitting frame...', 'warn');
+        sSymIdx     = 0;
+        log('Retransmitting frame from calibration start...', 'warn');
         showCalibFrame();
+    }
+
+    function exitTxView() {
+        clearTimeout(sSymTimer);
+        if (TX) TX.stop();
+        setSenderState('IDLE');
+        if (TX) TX.drawIdle();
+        hideTxView();
+        log('Exited transmission screen back to setup.');
+        validateSender();
     }
 
     function resetSender() {
         clearTimeout(sSymTimer);
+        if (TX) TX.stop();
         setSenderState('IDLE');
         if (TX) TX.drawIdle();
+        hideTxView();
         document.getElementById('sender-log').innerHTML = '';
         sRetransmit  = false;
         sRttEstimate = 1500;
         validateSender();
+        log('Sender reset.');
     }
 
     window.addEventListener('resize', () => {
-        if (TX && !document.fullscreenElement) {
-            const canvas = document.getElementById('tx-canvas');
-            const S = Math.min(window.innerWidth, window.innerHeight) * 0.88;
-            canvas.width = canvas.height = Math.floor(S);
-            if (sState === 'CALIBRATE') TX.drawCalibration();
-            else TX.drawIdle();
-        }
+        resizeCanvas();
     });
 
     initSender();

@@ -51,6 +51,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function initReceiver() {
         document.getElementById('btn-calibrate').onclick      = startCalibration;
+        document.getElementById('btn-send-nack').onclick      = () => {
+            log('Manual NACK triggered by receiver - sending NACK tone...', 'warn');
+            sendFinalNack();
+        };
         document.getElementById('btn-reset-receiver').onclick = resetReceiver;
         document.getElementById('btn-submit-symbol').onclick  = submitSymbol;
         document.getElementById('btn-retransmit-ack').onclick = () => {

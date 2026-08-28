@@ -18,37 +18,35 @@
 
         _dim() {
             const S   = this.cvs.width;
-            const pad = LO.PAD_F * S;
-            const act = (1 - 2 * LO.PAD_F) * S;
-            const mS  = LO.MARKER_F * S;
             const ckS = LO.CLOCK_F * S;
+            const gap = LO.CLOCK_GAP_F * S;
             const cS  = LO.CELL_F * S;
-            return { S, pad, act, mS, ckS, cS };
+            const totalContentH = ckS + gap + (2 * cS);
+            const topPad = (S - totalContentH) / 2;
+            const ckX = (S - ckS) / 2;
+            const ckY = topPad;
+            const gX  = (S - 2 * cS) / 2;
+            const gY  = topPad + ckS + gap;
+            return { S, ckS, gap, cS, ckX, ckY, gX, gY };
         }
 
         _draw(cells) {
             const ctx = this.ctx;
-            const { S, pad, act, mS, ckS, cS } = this._dim();
+            const { S, ckS, cS, ckX, ckY, gX, gY } = this._dim();
 
             ctx.fillStyle = '#808080';
             ctx.fillRect(0, 0, S, S);
 
-            ctx.fillStyle = '#FF00FF';
-            ctx.fillRect(pad,            pad,            mS, mS);
-            ctx.fillRect(pad + act - mS, pad,            mS, mS);
-            ctx.fillRect(pad,            pad + act - mS, mS, mS);
-            ctx.fillRect(pad + act - mS, pad + act - mS, mS, mS);
-
-            const ckX = pad + act / 2 - ckS / 2;
-            const ckY = pad + mS + LO.CLOCK_GAP;
+            // Clock indicator
             ctx.fillStyle = this.clockState ? '#FFFFFF' : '#000000';
             ctx.fillRect(ckX, ckY, ckS, ckS);
             ctx.strokeStyle = '#000000';
-            ctx.lineWidth = 2;
+            ctx.lineWidth = Math.max(2, Math.round(S * 0.006));
             ctx.strokeRect(ckX, ckY, ckS, ckS);
 
-            const gX = pad + act / 2 - cS;
-            const gY = pad + act / 2 - cS;
+            // 2x2 Color Code Grid
+            const borderW = Math.max(2, Math.round(S * 0.006));
+            ctx.lineWidth = borderW;
 
             if (cells) {
                 for (let i = 0; i < 4; i++) {
@@ -57,14 +55,12 @@
                     ctx.fillStyle = CELL_HEX[cells[i]] || '#FFFFFF';
                     ctx.fillRect(cx, cy, cS, cS);
                     ctx.strokeStyle = '#000000';
-                    ctx.lineWidth = 2;
                     ctx.strokeRect(cx, cy, cS, cS);
                 }
             } else {
                 ctx.fillStyle = '#1a1a2e';
                 ctx.fillRect(gX, gY, cS * 2, cS * 2);
                 ctx.strokeStyle = '#000000';
-                ctx.lineWidth = 2;
                 ctx.strokeRect(gX, gY, cS * 2, cS * 2);
             }
         }

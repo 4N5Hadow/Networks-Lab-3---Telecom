@@ -7,17 +7,22 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main id="screen-sender">
-    <section id="tx-canvas-wrapper">
+  <!-- Dedicated Fullscreen Transmission View (Only Color Codes and Clock) -->
+  <div id="sender-tx-display-view" class="hidden">
+    <button id="btn-exit-tx" class="btn-floating-exit" title="Back to Setup">✕ Back</button>
+    <div id="tx-canvas-container">
       <canvas id="tx-canvas"></canvas>
-    </section>
+    </div>
+  </div>
+
+  <!-- Sender Configuration & Control Screen -->
+  <main id="sender-config-view">
+    <header>
+      <h2>Sender</h2>
+      <span id="sender-status-badge" class="badge">IDLE</span>
+    </header>
 
     <section id="sender-panel">
-      <header>
-        <h2>Sender</h2>
-        <span id="sender-status-badge" class="badge">IDLE</span>
-      </header>
-
       <div class="fields">
         <label for="msg-bits">Message bits (up to 20 bits):</label>
         <input type="text" id="msg-bits" placeholder="e.g. 0100011" maxlength="20" autocomplete="off" inputmode="text">
@@ -35,7 +40,7 @@
     </section>
   </main>
 
-  <!-- Standard Vanilla JS architecture, similar to WebRTC/OpenCV samples -->
+  <!-- Standard Vanilla JS architecture -->
   <script src="js/layout.js"></script>
   <script src="js/hamming.js"></script>
   <script src="js/framing.js"></script>
