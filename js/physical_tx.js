@@ -18,9 +18,9 @@
 
         _dim() {
             const S   = this.cvs.width;
-            const ckS = LO.CLOCK_F * S;
-            const gap = LO.CLOCK_GAP_F * S;
-            const cS  = LO.CELL_F * S;
+            const ckS = LO.CLOCK_SIZE * S;
+            const gap = LO.GAP * S;
+            const cS  = LO.CELL_SIZE * S;
             const totalContentH = ckS + gap + (2 * cS);
             const topPad = (S - totalContentH) / 2;
             const ckX = (S - ckS) / 2;
