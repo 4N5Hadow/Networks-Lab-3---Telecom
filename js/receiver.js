@@ -8,40 +8,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let rListenTimer = null;
     let rLastDecodedSeq = null;
 
-    function log(msg, type = '') {
-        const element = document.getElementById('receiver-log');
-        if (!element) return;
-        const line = document.createElement('div');
-        line.className = 'log-line' + (type ? ' ' + type : '');
-        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        line.textContent = `[${timestamp}] ${msg}`;
-        element.appendChild(line);
-        element.scrollTop = element.scrollHeight;
-    }
-
-    function setstatus(text, type) {
-        const element = document.getElementById('receiver_status');
-        if (!element) return;
-        element.textContent = text;
-        if(type){
-            element.className = 'status ' + type;
-        }
-        else{
-            element.className = 'status idle';
-        }
-    }
-
     function setRxState(st) {
         rState = st;
-        const labels = {
-            IDLE: ['IDLE', 'idle'],
-            CALIBRATING: ['CALIBRATING', 'calib'],
-            LISTEN: ['LISTENING', 'active'],
-            DONE: ['DONE', 'success'],
-        };
-        const [text, type] = labels[st] || [st, 'idle'];
-        setstatus(text, type);
-
         const isListen = st === 'LISTEN';
         document.getElementById('color-input').disabled = !isListen;
         document.getElementById('submit_btn').disabled = !isListen;
@@ -50,13 +18,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function initReceiver() {
         document.getElementById('calibrate_btn').onclick = startCalibration;
         document.getElementById('nack_btn_manual').onclick = () => {
-            log('Manual NACK triggered by receiver - sending NACK tone...', 'warn');
             sendFinalNack();
         };
         document.getElementById('reset_btn').onclick = resetReceiver;
         document.getElementById('submit_btn').onclick = submitSymbol;
         document.getElementById('ack_btn').onclick = () => {
-            log('Manual ACK retransmission triggered.');
             AudioTX.playTone('ACK');
         };
         document.getElementById('color-input').onkeydown = (e) => {
@@ -64,16 +30,13 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         setRxState('IDLE');
-        log('Receiver initialized. Press "Start Calibration & Listening" when ready.');
     }
 
     function startCalibration() {
         document.getElementById('calibrate_btn').disabled = true;
         setRxState('CALIBRATING');
 
-        log('Transmitting READY tone...');
         AudioTX.playTone('READY').then(() => {
-            log('READY tone sent. Ready to receive symbols (W/R/G/B).');
             startListening();
         });
     }
@@ -92,7 +55,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const timeout = Math.max(5000, Math.min(120000, 10 * rRttEstimate));
         rListenTimer = setTimeout(() => {
             if (rState === 'LISTEN') {
-                log(`Listen timeout (${Math.round(timeout / 1000)}s). Sending NACK...`, 'warn');
                 sendFinalNack();
             }
         }, timeout);
@@ -117,7 +79,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const input = document.getElementById('color-input').value.trim().toUpperCase();
         if (input.length !== 4) {
-            log(`Invalid input: "${input}". Must be exactly 4 characters (e.g. RGBW).`, 'warn');
             return;
         }
 
@@ -126,7 +87,6 @@ document.addEventListener('DOMContentLoaded', () => {
         for (let i = 0; i < 4; i++) {
             const char = input[i];
             if (!(char in map)) {
-                log(`Invalid character: "${char}". Use W, R, G, B.`, 'warn');
                 return;
             }
             cells.push(map[char]);
@@ -148,8 +108,6 @@ document.addEventListener('DOMContentLoaded', () => {
             rBitBuf.push(c & 1);
         }
 
-        log(`Symbol ${rSymCount}/6 received manually: [${cells.map(c => Framing.COLOR_NAMES[c]).join(', ')}]`);
-
         if (rBitBuf.length >= Framing.PADDED_BITS) {
             stopAckRetransmitTimer();
             stopListenTimer();
@@ -158,7 +116,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (result && result.L > 0 && result.L <= 20 && result.messageBits.length === result.L) {
                 handleDecodeSuccess(result);
             } else {
-                log('Frame validation failed. Sending NACK.', 'error');
                 sendFinalNack();
             }
         } else {
@@ -174,18 +131,15 @@ document.addEventListener('DOMContentLoaded', () => {
         stopListenTimer();
 
         if (result.seq === rLastDecodedSeq) {
-            log(`Duplicate frame detected (SEQ: ${result.seq}). Sending ACK.`, 'warn');
             AudioTX.playTone('ACK').then(() => {
                 document.getElementById('ack_btn').disabled = false;
             });
         } else {
             rLastDecodedSeq = result.seq;
             setRxState('DONE');
-            log(`Frame decoded: SEQ=${result.seq}, Length=${result.L}, Data=${result.messageBits.join('')}`, 'success');
             showResult(result);
 
             AudioTX.playTone('ACK').then(() => {
-                log('Final ACK sent. Ready for next transmission.', 'success');
                 document.getElementById('calibrate_btn').disabled = false;
                 document.getElementById('ack_btn').disabled = false;
             });
@@ -224,7 +178,6 @@ document.addEventListener('DOMContentLoaded', () => {
         setRxState('IDLE');
         document.getElementById('ack_btn').disabled = true;
         AudioTX.playTone('NACK').then(() => {
-            log('NACK sent. Waiting for sender restart...', 'warn');
             rBitBuf = []; rSymCount = 0;
             document.getElementById('calibrate_btn').disabled = false;
         });
@@ -237,11 +190,9 @@ document.addEventListener('DOMContentLoaded', () => {
         rBitBuf = []; rSymCount = 0;
         setRxState('IDLE');
         document.getElementById('rx-result-area').classList.add('hidden');
-        document.getElementById('receiver-log').innerHTML = '';
         document.getElementById('calibrate_btn').disabled = false;
         document.getElementById('ack_btn').disabled = true;
         document.getElementById('color-input').value = '';
-        log('Receiver reset. Press "Start Calibration & Listening" to restart.');
     }
 
     initReceiver();

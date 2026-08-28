@@ -4,7 +4,6 @@
  * sender.js
  * 
  * Vanilla JS implementation of the Sender side of the TeleCom system.
- * This pattern avoids frameworks and uses basic DOM manipulation.
  */
 document.addEventListener('DOMContentLoaded', () => {
     let TX = null, SARX = null;
@@ -18,30 +17,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let sSymTimer = null;
     let sRttEstimate = 1500;
     let sSymShowTime = 0;
-
-    function log(msg, type = '') {
-        const el = document.getElementById('sender-log');
-        if (!el) return;
-        const line = document.createElement('div');
-        line.className = 'log-line' + (type ? ' ' + type : '');
-        const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        line.textContent = `[${ts}] ${msg}`;
-        el.appendChild(line);
-        el.scrollTop = el.scrollHeight;
-        while (el.children.length > 80) el.removeChild(el.firstChild);
-    }
-
-    function setstatus(text, type) {
-        const element = document.getElementById('sender_status');
-        if (!element) return;
-        element.textContent = text;
-        if(type){
-            element.className = 'status ' + type;
-        }
-        else{
-            element.className = 'status idle';
-        }
-    }
 
     function getSenderTimeout() {
         return Math.max(5000, Math.min(120000, 10 * sRttEstimate));
@@ -89,12 +64,8 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             stream.getTracks().forEach(t => t.stop());
-
-            const ok = await SARX.start();
-            log(ok ? 'Microphone ready - listening for tones.' : 'Microphone unavailable.', ok ? '' : 'warn');
-        } catch (e) {
-            log('Microphone access denied.', 'error');
-        }
+            await SARX.start();
+        } catch (_) {}
 
         document.getElementById('msg-bits').oninput = () => { sanitizeBits(); validateSender(); };
         document.getElementById('error-bit').oninput = validateSender;
@@ -106,7 +77,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         setSenderState('IDLE');
         validateSender();
-        log('Sender initialized. Ready to transmit.');
     }
 
     function sanitizeBits() {
@@ -121,16 +91,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function setSenderState(st) {
         sState = st;
-        const labels = {
-            IDLE: ['IDLE', 'idle'],
-            CALIBRATE: ['CALIBRATE', 'calib'],
-            ENCODE: ['ENCODING', 'active'],
-            TRANSMIT: ['TRANSMITTING', 'active'],
-            SYM_GAP: ['GAP', 'active'],
-            DONE: ['DONE', 'success'],
-        };
-        const [text, type] = labels[st] || [st, 'idle'];
-        setstatus(text, type);
         validateSender();
     }
 
@@ -143,11 +103,10 @@ document.addEventListener('DOMContentLoaded', () => {
         sRttEstimate = 1500;
 
         if (sErrBit !== null && (sErrBit < 0 || sErrBit >= sMsgBits.length)) {
-            alert(`Error bit index ${sErrBit} out of range (0-${sMsgBits.length - 1})`);
+            alert('Error bit index ' + sErrBit + ' out of range (0-' + (sMsgBits.length - 1) + ')');
             return;
         }
 
-        log(`Loaded message: ${bitsStr} (Length: ${sMsgBits.length}, simulated error: ${sErrBit ?? 'none'})`);
         showCalibFrame();
     }
 
@@ -155,15 +114,11 @@ document.addEventListener('DOMContentLoaded', () => {
         setSenderState('CALIBRATE');
         showTxView();
         TX.drawCalibration();
-        log('Calibration pattern displayed. Waiting for receiver READY tone...');
     }
 
     function onSenderTone(tone) {
-        log(`Detected tone: ${tone}`);
-
         if (tone === 'NACK') {
             clearTimeout(sSymTimer);
-            log('NACK received from receiver! Restarting from starting calibration state...', 'warn');
             doFullRestart();
             return;
         }
@@ -171,7 +126,6 @@ document.addEventListener('DOMContentLoaded', () => {
         switch (sState) {
             case 'CALIBRATE':
                 if (tone === 'READY') {
-                    log('READY tone detected. Starting transmission...', 'success');
                     doEncode();
                 }
                 break;
@@ -190,7 +144,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         setSenderState('DONE');
                         TX.drawIdle();
                         sSeq ^= 1;
-                        log('Final symbol acknowledged & frame verified! Transmission complete.', 'success');
                         setTimeout(() => {
                             if (sState === 'DONE') {
                                 setSenderState('IDLE');
@@ -198,7 +151,6 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                         }, 3500);
                     } else {
-                        log(`Symbol ${sSymIdx} acknowledged (RTT: ${measuredRtt}ms).`, 'success');
                         setSenderState('SYM_GAP');
                         setTimeout(doTransmitNextSymbol, 500);
                     }
@@ -212,7 +164,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const bits48 = Framing.buildFrame(sMsgBits, sErrBit, sSeq);
         sSymbols = Framing.bitsToSymbols(bits48);
         sSymIdx = 0;
-        log(`Encoded frame into ${sSymbols.length} symbols`);
         TX.drawIdle();
         setTimeout(doTransmitNextSymbol, 300);
     }
@@ -225,11 +176,9 @@ document.addEventListener('DOMContentLoaded', () => {
         sSymShowTime = Date.now();
 
         const timeout = getSenderTimeout();
-        log(`Displaying symbol ${sSymIdx + 1}/${sSymbols.length}`);
 
         sSymTimer = setTimeout(() => {
             if (sState === 'TRANSMIT') {
-                log(`Symbol ${sSymIdx + 1} timeout. Restarting from starting calibration state...`, 'warn');
                 doFullRestart();
             }
         }, timeout);
@@ -239,7 +188,6 @@ document.addEventListener('DOMContentLoaded', () => {
         clearTimeout(sSymTimer);
         sRetransmit = true;
         sSymIdx = 0;
-        log('Retransmitting frame from calibration start...', 'warn');
         showCalibFrame();
     }
 
@@ -249,7 +197,6 @@ document.addEventListener('DOMContentLoaded', () => {
         setSenderState('IDLE');
         if (TX) TX.drawIdle();
         hideTxView();
-        log('Exited transmission screen back to setup.');
         validateSender();
     }
 
@@ -259,11 +206,9 @@ document.addEventListener('DOMContentLoaded', () => {
         setSenderState('IDLE');
         if (TX) TX.drawIdle();
         hideTxView();
-        document.getElementById('sender-log').innerHTML = '';
         sRetransmit = false;
         sRttEstimate = 1500;
         validateSender();
-        log('Sender reset.');
     }
 
     window.addEventListener('resize', () => {

@@ -62,34 +62,6 @@ header h2 {
   margin: 0;
 }
 
-.status {
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  padding: 0.25rem 0.5rem;
-  border-radius: var(--r-sm);
-  background: var(--surf2);
-  border: 1px solid var(--border);
-}
-
-.status.idle {
-  color: var(--muted);
-}
-
-.status.active {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.status.calib {
-  color: var(--warn);
-  border-color: var(--warn);
-}
-
-.status.success {
-  color: var(--success);
-  border-color: var(--success);
-}
-
 main {
   flex: 1;
   display: flex;
@@ -266,58 +238,6 @@ button.nack_btn {
 
 button.nack_btn:hover:not(:disabled) {
   background: #dc2626;
-}
-
-.log-box {
-  flex: 1;
-  background: var(--bg);
-  border-top: 1px solid var(--border);
-  padding: 1rem;
-  font-family: var(--mono);
-  font-size: 0.8rem;
-  color: var(--muted);
-  overflow-y: auto;
-  min-height: 150px;
-}
-
-.log-line.success {
-  color: var(--success);
-}
-
-.log-line.warn {
-  color: var(--warn);
-}
-
-.log-line.error {
-  color: var(--error);
-}
-
-.hidden {
-  display: none !important;
-}
-
-.dbg-stat-v {
-  color: var(--secondary);
-  font-family: var(--mono);
-}
-
-.dbg-stat-v.small {
-  font-size: .62rem;
-}
-
-.debug-log {
-  max-height: 160px;
-  margin: 0 1rem 1rem;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--border);
-}
-
-.mono {
-  font-family: var(--mono);
-}
-
-.small {
-  font-size: .68rem;
 }
 
 .hidden {
