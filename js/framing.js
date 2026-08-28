@@ -1,6 +1,6 @@
 'use strict';
 (function () {
-    const SYNC = Object.freeze([1, 1, 1, 0, 0, 1, 0]);
+    const SYN = Object.freeze([1, 1, 1, 0, 0, 1, 0]);
     const END = Object.freeze([0, 1, 1, 1]);
     const FRAME_BITS = 42;
     const PADDED_BITS = 48;
@@ -19,31 +19,36 @@
         let codeword = Hamming.encode([...lenBits, ...payload]);
         codeword = Hamming.injectError(codeword, errorMsgBit);
 
-        const frame = [
-            ...SYNC,
-            (seq & 1),
-            ...codeword,
-            ...END,
-            ...new Array(PADDED_BITS - 42).fill(0),
-        ];
+        const frame = [...SYN, (seq & 1), ...codeword, ...END, ...new Array(PADDED_BITS - 42).fill(0),];
         return frame;
     }
 
     function bitsToSymbols(bits48) {
-        const symbols = [];
-        for (let s = 0; s < NUM_SYMBOLS; s++) {
-            const cells = [];
-            for (let c = 0; c < 4; c++) {
-                const base = s * 8 + c * 2;
-                cells.push((bits48[base] << 1) | bits48[base + 1]);
+        let allSymbols = [];
+        // for (let s = 0; s < NUM_SYMBOLS; s++) {
+        //     let symbol = [];
+        //     for (let c = 0; c < 4; c++) {
+        //         let base = s * 8 + c * 2;
+        //         symbol.push((bits48[base] << 1) | bits48[base + 1]);
+        //     }
+        //     allSymbols.push(symbol);
+        // }
+        let symbol = [];
+
+        for (let i = 0; i < NUM_SYMBOLS * 8; i += 2) {
+            symbol.push((bits48[i] << 1) | bits48[i + 1]);
+
+            if (i % 8 === 6) {
+                allSymbols.push(symbol);
+                symbol = [];
             }
-            symbols.push(cells);
         }
-        return symbols;
+
+        return allSymbols;
     }
 
     function parseFrame(bitBuf) {
-        const syncStr = SYNC.join('');
+        const syncStr = SYN.join('');
         const endStr = END.join('');
         const need = 42;
 
@@ -74,7 +79,7 @@
 
     window.Framing = {
         buildFrame, bitsToSymbols, parseFrame,
-        SYNC, END, FRAME_BITS, PADDED_BITS, NUM_SYMBOLS,
+        SYNC: SYN, END, FRAME_BITS, PADDED_BITS, NUM_SYMBOLS,
         COLOR_NAMES, COLOR_HEX,
     };
 })();

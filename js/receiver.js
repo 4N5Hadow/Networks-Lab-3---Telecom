@@ -53,6 +53,10 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('btn-calibrate').onclick      = startCalibration;
         document.getElementById('btn-reset-receiver').onclick = resetReceiver;
         document.getElementById('btn-submit-symbol').onclick  = submitSymbol;
+        document.getElementById('btn-retransmit-ack').onclick = () => {
+            log('Manual ACK retransmission triggered.');
+            AudioTX.playTone('ACK');
+        };
         document.getElementById('color-input').onkeydown      = (e) => {
             if (e.key === 'Enter') submitSymbol();
         };
@@ -78,6 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('rx-result-area').classList.add('hidden');
         document.getElementById('color-input').value = '';
         document.getElementById('color-input').focus();
+        document.getElementById('btn-retransmit-ack').disabled = true;
     }
 
     function startListenTimer() {
@@ -128,6 +133,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Clear input for next symbol
         document.getElementById('color-input').value = '';
         document.getElementById('color-input').focus();
+        document.getElementById('btn-retransmit-ack').disabled = true;
 
         onNewSymbol(cells);
     }
@@ -155,7 +161,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } else {
             stopListenTimer();
-            AudioTX.playTone('ACK');
+            AudioTX.playTone('ACK').then(() => {
+                document.getElementById('btn-retransmit-ack').disabled = false;
+            });
         }
     }
 
@@ -165,7 +173,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (result.seq === rLastDecodedSeq) {
             log(`Duplicate frame detected (SEQ: ${result.seq}). Sending ACK.`, 'warn');
-            AudioTX.playTone('ACK');
+            AudioTX.playTone('ACK').then(() => {
+                document.getElementById('btn-retransmit-ack').disabled = false;
+            });
         } else {
             rLastDecodedSeq = result.seq;
             setRxState('DONE');
@@ -175,6 +185,7 @@ document.addEventListener('DOMContentLoaded', () => {
             AudioTX.playTone('ACK').then(() => {
                 log('Final ACK sent. Ready for next transmission.', 'success');
                 document.getElementById('btn-calibrate').disabled = false;
+                document.getElementById('btn-retransmit-ack').disabled = false;
             });
         }
     }
@@ -209,6 +220,7 @@ document.addEventListener('DOMContentLoaded', () => {
         stopAckRetransmitTimer();
         stopListenTimer();
         setRxState('IDLE');
+        document.getElementById('btn-retransmit-ack').disabled = true;
         AudioTX.playTone('NACK').then(() => {
             log('NACK sent. Waiting for sender restart...', 'warn');
             rBitBuf = []; rSymCount = 0;
@@ -225,6 +237,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('rx-result-area').classList.add('hidden');
         document.getElementById('receiver-log').innerHTML = '';
         document.getElementById('btn-calibrate').disabled = false;
+        document.getElementById('btn-retransmit-ack').disabled = true;
         document.getElementById('color-input').value = '';
         log('Receiver reset. Press "Start Calibration & Listening" to restart.');
     }
