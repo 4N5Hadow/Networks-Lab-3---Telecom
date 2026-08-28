@@ -42,7 +42,7 @@ section {
   left: 0;
   width: 100vw;
   height: 100vh;
-  background: #000000;
+  background: #808080;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -60,7 +60,7 @@ section {
   width: 80px;
   height: 80px;
   background-color: #000000;
-  border: 3px solid #000000;
+  border: 3px solid #222222;
   border-radius: 4px;
 }
 
@@ -71,7 +71,7 @@ section {
 #tx-grid td {
   width: 160px;
   height: 160px;
-  border: 3px solid #000000;
+  border: 3px solid #222222;
   background-color: #1a1a2e;
 }
 
