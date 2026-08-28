@@ -72,7 +72,7 @@
         let errorCwPos = null, errorDataIdx = null;
         if (syndrome > 0 && syndrome <= N) {
             cw[syndrome] ^= 1;
-            errorCwPos   = syndrome;
+            errorCwPos = syndrome;
             errorDataIdx = CW_TO_DATA[syndrome];
         }
 
