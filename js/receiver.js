@@ -26,42 +26,42 @@ document.addEventListener('DOMContentLoaded', () => {
         while (el.children.length > 80) el.removeChild(el.firstChild);
     }
 
-    function setBadge(text, type) {
-        const el = document.getElementById('receiver-status-badge');
+    function setstatus(text, type) {
+        const el = document.getElementById('receiver_status');
         if (!el) return;
         el.textContent = text;
-        el.className   = 'badge ' + (type || 'idle');
+        el.className = 'status ' + (type || 'idle');
     }
 
     function setRxState(st) {
         rState = st;
         const labels = {
-            IDLE:        ['IDLE',        'idle'],
+            IDLE: ['IDLE', 'idle'],
             CALIBRATING: ['CALIBRATING', 'calib'],
-            LISTEN:      ['LISTENING',   'active'],
-            DONE:        ['DONE',        'success'],
+            LISTEN: ['LISTENING', 'active'],
+            DONE: ['DONE', 'success'],
         };
         const [text, type] = labels[st] || [st, 'idle'];
-        setBadge(text, type);
+        setstatus(text, type);
 
         const isListen = st === 'LISTEN';
         document.getElementById('color-input').disabled = !isListen;
-        document.getElementById('btn-submit-symbol').disabled = !isListen;
+        document.getElementById('submit_btn').disabled = !isListen;
     }
 
     function initReceiver() {
-        document.getElementById('btn-calibrate').onclick      = startCalibration;
-        document.getElementById('btn-send-nack').onclick      = () => {
+        document.getElementById('calibrate_btn').onclick = startCalibration;
+        document.getElementById('nack_btn_manual').onclick = () => {
             log('Manual NACK triggered by receiver - sending NACK tone...', 'warn');
             sendFinalNack();
         };
-        document.getElementById('btn-reset-receiver').onclick = resetReceiver;
-        document.getElementById('btn-submit-symbol').onclick  = submitSymbol;
-        document.getElementById('btn-retransmit-ack').onclick = () => {
+        document.getElementById('reset_btn').onclick = resetReceiver;
+        document.getElementById('submit_btn').onclick = submitSymbol;
+        document.getElementById('ack_btn').onclick = () => {
             log('Manual ACK retransmission triggered.');
             AudioTX.playTone('ACK');
         };
-        document.getElementById('color-input').onkeydown      = (e) => {
+        document.getElementById('color-input').onkeydown = (e) => {
             if (e.key === 'Enter') submitSymbol();
         };
 
@@ -70,9 +70,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function startCalibration() {
-        document.getElementById('btn-calibrate').disabled = true;
+        document.getElementById('calibrate_btn').disabled = true;
         setRxState('CALIBRATING');
-        
+
         log('Transmitting READY tone...');
         AudioTX.playTone('READY').then(() => {
             log('READY tone sent. Ready to receive symbols (W/R/G/B).');
@@ -86,7 +86,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('rx-result-area').classList.add('hidden');
         document.getElementById('color-input').value = '';
         document.getElementById('color-input').focus();
-        document.getElementById('btn-retransmit-ack').disabled = true;
+        document.getElementById('ack_btn').disabled = true;
     }
 
     function startListenTimer() {
@@ -137,7 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Clear input for next symbol
         document.getElementById('color-input').value = '';
         document.getElementById('color-input').focus();
-        document.getElementById('btn-retransmit-ack').disabled = true;
+        document.getElementById('ack_btn').disabled = true;
 
         onNewSymbol(cells);
     }
@@ -166,7 +166,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             stopListenTimer();
             AudioTX.playTone('ACK').then(() => {
-                document.getElementById('btn-retransmit-ack').disabled = false;
+                document.getElementById('ack_btn').disabled = false;
             });
         }
     }
@@ -178,7 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (result.seq === rLastDecodedSeq) {
             log(`Duplicate frame detected (SEQ: ${result.seq}). Sending ACK.`, 'warn');
             AudioTX.playTone('ACK').then(() => {
-                document.getElementById('btn-retransmit-ack').disabled = false;
+                document.getElementById('ack_btn').disabled = false;
             });
         } else {
             rLastDecodedSeq = result.seq;
@@ -188,16 +188,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
             AudioTX.playTone('ACK').then(() => {
                 log('Final ACK sent. Ready for next transmission.', 'success');
-                document.getElementById('btn-calibrate').disabled = false;
-                document.getElementById('btn-retransmit-ack').disabled = false;
+                document.getElementById('calibrate_btn').disabled = false;
+                document.getElementById('ack_btn').disabled = false;
             });
         }
     }
 
     function showResult(result) {
-        const area   = document.getElementById('rx-result-area');
-        const msgEl  = document.getElementById('rx-message');
-        const errEl  = document.getElementById('rx-err-info');
+        const area = document.getElementById('rx-result-area');
+        const msgEl = document.getElementById('rx-message');
+        const errEl = document.getElementById('rx-err-info');
         const metaEl = document.getElementById('rx-meta');
         area.classList.remove('hidden');
 
@@ -211,11 +211,11 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             msgEl.innerHTML = html;
             errEl.textContent = `Bit ${errIdx} (0-indexed) was corrupted on medium and corrected in-place.`;
-            errEl.className   = 'rx-err-info error';
+            errEl.className = 'rx-err-info error';
         } else {
             msgEl.textContent = bits.join('');
-            errEl.textContent  = 'No error detected (clean transmission).';
-            errEl.className    = 'rx-err-info ok';
+            errEl.textContent = 'No error detected (clean transmission).';
+            errEl.className = 'rx-err-info ok';
         }
         metaEl.textContent = `Length: ${bits.length} bits | Symbols: ${rSymCount}`;
     }
@@ -224,11 +224,11 @@ document.addEventListener('DOMContentLoaded', () => {
         stopAckRetransmitTimer();
         stopListenTimer();
         setRxState('IDLE');
-        document.getElementById('btn-retransmit-ack').disabled = true;
+        document.getElementById('ack_btn').disabled = true;
         AudioTX.playTone('NACK').then(() => {
             log('NACK sent. Waiting for sender restart...', 'warn');
             rBitBuf = []; rSymCount = 0;
-            document.getElementById('btn-calibrate').disabled = false;
+            document.getElementById('calibrate_btn').disabled = false;
         });
     }
 
@@ -240,8 +240,8 @@ document.addEventListener('DOMContentLoaded', () => {
         setRxState('IDLE');
         document.getElementById('rx-result-area').classList.add('hidden');
         document.getElementById('receiver-log').innerHTML = '';
-        document.getElementById('btn-calibrate').disabled = false;
-        document.getElementById('btn-retransmit-ack').disabled = true;
+        document.getElementById('calibrate_btn').disabled = false;
+        document.getElementById('ack_btn').disabled = true;
         document.getElementById('color-input').value = '';
         log('Receiver reset. Press "Start Calibration & Listening" to restart.');
     }

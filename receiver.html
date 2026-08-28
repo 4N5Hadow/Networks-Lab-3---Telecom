@@ -1,24 +1,26 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Receiver - TeleCom System</title>
+  <title>Receiver</title>
   <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
-  <main id="screen-receiver">
+  <main id="receiver_screen">
     <header>
       <h2>Receiver</h2>
-      <span id="receiver-status-badge" class="badge">IDLE</span>
+      <span id="receiver_status" class="status">IDLE</span>
     </header>
 
     <section class="rx-top">
       <div class="fields">
-        <label for="color-input">Enter Symbol Colors (e.g. RGBW):</label>
-        <input type="text" id="color-input" placeholder="W, R, G, B" maxlength="4" autocomplete="off" class="mono" disabled>
+        <label for="color-input">Enter Symbol Colors:</label>
+        <input type="text" id="color-input" placeholder="WRGB" maxlength="4" autocomplete="off" class="mono" disabled>
         <br>
-        <button id="btn-submit-symbol" class="btn" disabled>Submit Symbol</button>
+        <button id="submit_btn" class="btn" disabled>Submit Symbol</button>
       </div>
     </section>
 
@@ -29,11 +31,11 @@
       <div id="rx-meta"></div>
     </section>
 
-    <div class="btn-row">
-      <button id="btn-calibrate">Start Calibration & Listening</button>
-      <button id="btn-send-nack" class="btn-nack">Send NACK</button>
-      <button id="btn-reset-receiver">Reset</button>
-      <button id="btn-retransmit-ack" disabled>Retransmit ACK</button>
+    <div class="btn_area">
+      <button id="calibrate_btn">Start Calibration & Listening</button>
+      <button id="nack_btn_manual" class="nack_btn">Send NACK</button>
+      <button id="reset_btn">Reset</button>
+      <button id="ack_btn" disabled>Retransmit ACK</button>
     </div>
 
     <div id="receiver-log" class="log-box"></div>
@@ -46,4 +48,5 @@
   <script src="js/audio_rx.js"></script>
   <script src="js/receiver.js"></script>
 </body>
+
 </html>

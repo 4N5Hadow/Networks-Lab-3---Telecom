@@ -62,7 +62,7 @@ header h2 {
   margin: 0;
 }
 
-.badge {
+.status {
   font-family: var(--mono);
   font-size: 0.75rem;
   padding: 0.25rem 0.5rem;
@@ -71,21 +71,21 @@ header h2 {
   border: 1px solid var(--border);
 }
 
-.badge.idle {
+.status.idle {
   color: var(--muted);
 }
 
-.badge.active {
+.status.active {
   color: var(--accent);
   border-color: var(--accent);
 }
 
-.badge.calib {
+.status.calib {
   color: var(--warn);
   border-color: var(--warn);
 }
 
-.badge.success {
+.status.success {
   color: var(--success);
   border-color: var(--success);
 }
@@ -230,7 +230,8 @@ input[type="text"].mono {
   color: var(--error);
 }
 
-.btn-row {
+/* Buttons & Logs */
+.btn_area {
   display: flex;
   gap: 0.5rem;
   padding: 1rem;
@@ -252,18 +253,18 @@ button:disabled {
 }
 
 button#btn-reset-sender,
-button#btn-reset-receiver {
+button#reset_btn {
   background: var(--surf2);
   border: 1px solid var(--border);
   color: var(--muted);
 }
 
-button.btn-nack {
+button.nack_btn {
   background: var(--error);
   color: #fff;
 }
 
-button.btn-nack:hover:not(:disabled) {
+button.nack_btn:hover:not(:disabled) {
   background: #dc2626;
 }
 

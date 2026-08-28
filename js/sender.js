@@ -8,14 +8,14 @@
  */
 document.addEventListener('DOMContentLoaded', () => {
     let TX = null, SARX = null;
-    let sState       = 'IDLE';
-    let sMsgBits     = [];
-    let sErrBit      = null;
-    let sRetransmit  = false;
-    let sSeq         = 0;
-    let sSymbols     = [];
-    let sSymIdx      = 0;
-    let sSymTimer    = null;
+    let sState = 'IDLE';
+    let sMsgBits = [];
+    let sErrBit = null;
+    let sRetransmit = false;
+    let sSeq = 0;
+    let sSymbols = [];
+    let sSymIdx = 0;
+    let sSymTimer = null;
     let sRttEstimate = 1500;
     let sSymShowTime = 0;
 
@@ -31,11 +31,11 @@ document.addEventListener('DOMContentLoaded', () => {
         while (el.children.length > 80) el.removeChild(el.firstChild);
     }
 
-    function setBadge(text, type) {
-        const el = document.getElementById('sender-status-badge');
+    function setstatus(text, type) {
+        const el = document.getElementById('sender-status-status');
         if (!el) return;
         el.textContent = text;
-        el.className   = 'badge ' + (type || 'idle');
+        el.className = 'status ' + (type || 'idle');
     }
 
     function getSenderTimeout() {
@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const S = Math.min(window.innerWidth, window.innerHeight) * 0.94;
         canvas.width = canvas.height = Math.floor(S);
 
-        TX   = new PhysicalTX(canvas);
+        TX = new PhysicalTX(canvas);
         SARX = new AudioRX();
         TX.drawIdle();
 
@@ -84,18 +84,18 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             stream.getTracks().forEach(t => t.stop());
-            
+
             const ok = await SARX.start();
             log(ok ? 'Microphone ready - listening for tones.' : 'Microphone unavailable.', ok ? '' : 'warn');
-        } catch(e) {
+        } catch (e) {
             log('Microphone access denied.', 'error');
         }
 
-        document.getElementById('msg-bits').oninput   = () => { sanitizeBits(); validateSender(); };
-        document.getElementById('error-bit').oninput  = validateSender;
-        document.getElementById('btn-show-calib').onclick   = onSenderStart;
+        document.getElementById('msg-bits').oninput = () => { sanitizeBits(); validateSender(); };
+        document.getElementById('error-bit').oninput = validateSender;
+        document.getElementById('btn-show-calib').onclick = onSenderStart;
         document.getElementById('btn-reset-sender').onclick = resetSender;
-        
+
         const exitBtn = document.getElementById('btn-exit-tx');
         if (exitBtn) exitBtn.onclick = exitTxView;
 
@@ -117,23 +117,23 @@ document.addEventListener('DOMContentLoaded', () => {
     function setSenderState(st) {
         sState = st;
         const labels = {
-            IDLE:         ['IDLE',        'idle'],
-            CALIBRATE:    ['CALIBRATE',   'calib'],
-            ENCODE:       ['ENCODING',    'active'],
-            TRANSMIT:     ['TRANSMITTING','active'],
-            SYM_GAP:      ['GAP',         'active'],
-            DONE:         ['DONE',        'success'],
+            IDLE: ['IDLE', 'idle'],
+            CALIBRATE: ['CALIBRATE', 'calib'],
+            ENCODE: ['ENCODING', 'active'],
+            TRANSMIT: ['TRANSMITTING', 'active'],
+            SYM_GAP: ['GAP', 'active'],
+            DONE: ['DONE', 'success'],
         };
         const [text, type] = labels[st] || [st, 'idle'];
-        setBadge(text, type);
+        setstatus(text, type);
         validateSender();
     }
 
     function onSenderStart() {
         const bitsStr = document.getElementById('msg-bits').value;
-        const errVal  = document.getElementById('error-bit').value.trim();
-        sMsgBits    = bitsStr.split('').map(Number);
-        sErrBit     = errVal !== '' ? parseInt(errVal, 10) : null;
+        const errVal = document.getElementById('error-bit').value.trim();
+        sMsgBits = bitsStr.split('').map(Number);
+        sErrBit = errVal !== '' ? parseInt(errVal, 10) : null;
         sRetransmit = false;
         sRttEstimate = 1500;
 
@@ -204,9 +204,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function doEncode() {
         setSenderState('ENCODE');
-        const bits48  = Framing.buildFrame(sMsgBits, sErrBit, sSeq);
-        sSymbols      = Framing.bitsToSymbols(bits48);
-        sSymIdx       = 0;
+        const bits48 = Framing.buildFrame(sMsgBits, sErrBit, sSeq);
+        sSymbols = Framing.bitsToSymbols(bits48);
+        sSymIdx = 0;
         log(`Encoded frame into ${sSymbols.length} symbols`);
         TX.drawIdle();
         setTimeout(doTransmitNextSymbol, 300);
@@ -233,7 +233,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function doFullRestart() {
         clearTimeout(sSymTimer);
         sRetransmit = true;
-        sSymIdx     = 0;
+        sSymIdx = 0;
         log('Retransmitting frame from calibration start...', 'warn');
         showCalibFrame();
     }
@@ -255,7 +255,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (TX) TX.drawIdle();
         hideTxView();
         document.getElementById('sender-log').innerHTML = '';
-        sRetransmit  = false;
+        sRetransmit = false;
         sRttEstimate = 1500;
         validateSender();
         log('Sender reset.');
