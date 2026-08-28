@@ -17,7 +17,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const txView = document.getElementById('sender-tx-display-view');
         if (configView) configView.classList.add('hidden');
         if (txView) txView.classList.remove('hidden');
-        resizeCanvas();
     }
 
     function hideTxView() {
@@ -27,26 +26,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (configView) configView.classList.remove('hidden');
     }
 
-    function resizeCanvas() {
-        const canvas = document.getElementById('tx-canvas');
-        if (!canvas || !TX) return;
-        const S = Math.min(window.innerWidth, window.innerHeight) * 0.94;
-        canvas.width = canvas.height = Math.floor(S);
-        if (sState === 'CALIBRATE') {
-            TX.drawCalibration();
-        } else if (sState === 'TRANSMIT' && sSymbols && sSymbols[sSymIdx]) {
-            TX.showSymbol(sSymbols[sSymIdx]);
-        } else {
-            TX.drawIdle();
-        }
-    }
-
     async function initSender() {
-        const canvas = document.getElementById('tx-canvas');
-        const S = Math.min(window.innerWidth, window.innerHeight) * 0.94;
-        canvas.width = canvas.height = Math.floor(S);
-
-        TX = new PhysicalTX(canvas);
+        TX = new PhysicalTX();
         SARX = new AudioRX();
         TX.drawIdle();
 
@@ -190,10 +171,6 @@ document.addEventListener('DOMContentLoaded', () => {
         sRetransmit = false;
         validateSender();
     }
-
-    window.addEventListener('resize', () => {
-        resizeCanvas();
-    });
 
     initSender();
 });
