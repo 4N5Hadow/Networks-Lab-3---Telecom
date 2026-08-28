@@ -126,18 +126,18 @@ document.addEventListener('DOMContentLoaded', () => {
             let html = '';
             bits.forEach((b, i) => {
                 html += i === errIdx
-                    ? `<span class="err-bit" title="bit ${i} corrected">${b}</span>`
+                    ? `<span class="err-bit">${b}</span>`
                     : `${b}`;
             });
             msgEl.innerHTML = html;
-            errEl.textContent = `Bit ${errIdx} (0-indexed) was corrupted on medium and corrected in-place.`;
+            errEl.textContent = 'Error at bit ' + errIdx + ' (corrected)';
             errEl.className = 'rx-err-info error';
         } else {
             msgEl.textContent = bits.join('');
-            errEl.textContent = 'No error detected (clean transmission).';
+            errEl.textContent = 'No errors detected';
             errEl.className = 'rx-err-info ok';
         }
-        metaEl.textContent = `Length: ${bits.length} bits | Symbols: ${rSymCount}`;
+        metaEl.textContent = 'Length: ' + bits.length + ' bits';
     }
 
     function sendFinalNack() {
