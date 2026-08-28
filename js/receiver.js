@@ -4,8 +4,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let rState = 'IDLE';
     let rBitBuf = [];
     let rSymCount = 0;
-    let rAckRetransmitTimer = null;
-    let rListenTimer = null;
     let rLastDecodedSeq = null;
 
     function setRxState(st) {
@@ -43,36 +41,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function startListening() {
         setRxState('LISTEN');
-        rBitBuf = []; rSymCount = 0;
+        rBitBuf = [];
+        rSymCount = 0;
         document.getElementById('rx-result-area').classList.add('hidden');
         document.getElementById('color-input').value = '';
         document.getElementById('color-input').focus();
         document.getElementById('ack_btn').disabled = true;
-    }
-
-    const LISTEN_TIMEOUT_MS = 15000;
-
-    function startListenTimer() {
-        stopListenTimer();
-        rListenTimer = setTimeout(() => {
-            if (rState === 'LISTEN') {
-                sendFinalNack();
-            }
-        }, LISTEN_TIMEOUT_MS);
-    }
-
-    function stopListenTimer() {
-        if (rListenTimer !== null) {
-            clearTimeout(rListenTimer);
-            rListenTimer = null;
-        }
-    }
-
-    function stopAckRetransmitTimer() {
-        if (rAckRetransmitTimer !== null) {
-            clearInterval(rAckRetransmitTimer);
-            rAckRetransmitTimer = null;
-        }
     }
 
     function submitSymbol() {
@@ -110,9 +84,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (rBitBuf.length >= Framing.PADDED_BITS) {
-            stopAckRetransmitTimer();
-            stopListenTimer();
-
             const result = Framing.parseFrame(rBitBuf);
             if (result && result.L > 0 && result.L <= 20 && result.messageBits.length === result.L) {
                 handleDecodeSuccess(result);
@@ -120,7 +91,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 sendFinalNack();
             }
         } else {
-            stopListenTimer();
             AudioTX.playTone('ACK').then(() => {
                 document.getElementById('ack_btn').disabled = false;
             });
@@ -128,9 +98,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleDecodeSuccess(result) {
-        stopAckRetransmitTimer();
-        stopListenTimer();
-
         if (result.seq === rLastDecodedSeq) {
             AudioTX.playTone('ACK').then(() => {
                 document.getElementById('ack_btn').disabled = false;
@@ -174,21 +141,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function sendFinalNack() {
-        stopAckRetransmitTimer();
-        stopListenTimer();
         setRxState('IDLE');
         document.getElementById('ack_btn').disabled = true;
         AudioTX.playTone('NACK').then(() => {
-            rBitBuf = []; rSymCount = 0;
+            rBitBuf = [];
+            rSymCount = 0;
             document.getElementById('calibrate_btn').disabled = false;
         });
     }
 
     function resetReceiver() {
-        stopAckRetransmitTimer();
-        stopListenTimer();
         rLastDecodedSeq = null;
-        rBitBuf = []; rSymCount = 0;
+        rBitBuf = [];
+        rSymCount = 0;
         setRxState('IDLE');
         document.getElementById('rx-result-area').classList.add('hidden');
         document.getElementById('calibrate_btn').disabled = false;

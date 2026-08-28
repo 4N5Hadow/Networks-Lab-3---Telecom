@@ -1,12 +1,12 @@
 'use strict';
 (function () {
-    const SYN = Object.freeze([1, 1, 1, 0, 0, 1, 0]);
-    const END = Object.freeze([0, 1, 1, 1]);
+    const SYN = [1, 1, 1, 0, 0, 1, 0];
+    const END = [0, 1, 1, 1];
     const FRAME_BITS = 42;
     const PADDED_BITS = 48;
     const NUM_SYMBOLS = 6;
-    const COLOR_NAMES = Object.freeze(['WHITE', 'RED', 'GREEN', 'BLUE']);
-    const COLOR_HEX = Object.freeze(['#FFFFFF', '#FF0000', '#00FF00', '#0000FF']);
+    const COLOR_NAMES = ['WHITE', 'RED', 'GREEN', 'BLUE'];
+    const COLOR_HEX = ['#FFFFFF', '#FF0000', '#00FF00', '#0000FF'];
 
     function buildFrame(messageBits, errorMsgBit = null, seq = 0) {
         const L = messageBits.length;

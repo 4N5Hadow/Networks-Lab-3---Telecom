@@ -1,10 +1,10 @@
 'use strict';
 (function () {
-    const TONE_SPECS = Object.freeze({
+    const TONE_SPECS = {
         READY: { freqs: [1150, 1450], dur: 0.45 },
         ACK: { freqs: [1750, 2150], dur: 0.45 },
         NACK: { freqs: [2550, 2950], dur: 0.45 },
-    });
+    };
     let _ctx = null;
 
     function _getCtx() {

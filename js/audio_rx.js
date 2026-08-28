@@ -1,11 +1,11 @@
 'use strict';
 
 (function () {
-    const CHORD_TONES = Object.freeze([
+    const CHORD_TONES = [
         { name: 'READY', freqs: [1150, 1450] },
         { name: 'ACK', freqs: [1750, 2150] },
         { name: 'NACK', freqs: [2550, 2950] },
-    ]);
+    ];
 
     const TARGET_BAND_HZ = 35;
     const GUARD_MIN_HZ = 60;
@@ -83,7 +83,6 @@
             const guardMinB = Math.max(1, Math.ceil(GUARD_MIN_HZ / hzPerBin));
             const guardMaxB = Math.max(2, Math.ceil(GUARD_MAX_HZ / hzPerBin));
 
-            const debugInfo = {};
             let bestName = null, bestScore = -Infinity;
 
             for (const { name, freqs } of CHORD_TONES) {
@@ -131,20 +130,12 @@
                 const avgPeak = (peaks[0] + peaks[1]) / 2;
                 const score = minProm + (avgPeak / 10);
 
-                debugInfo[name] = {
-                    peaks: peaks.map(p => p.toFixed(1)),
-                    prominences: prominences.map(pr => pr.toFixed(1)),
-                    twist: twist.toFixed(1),
-                    pass: allPass,
-                };
-
                 if (allPass && score > bestScore) {
                     bestScore = score;
                     bestName = name;
                 }
             }
 
-            if (this.onDebugPoll) this.onDebugPoll(debugInfo);
             if (bestName && bestName === this._pendingTone) {
                 this._pendingCount++;
             } else {
