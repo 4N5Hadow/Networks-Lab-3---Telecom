@@ -32,7 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function setstatus(text, type) {
-        const el = document.getElementById('sender-status-status');
+        const el = document.getElementById('sender_status');
         if (!el) return;
         el.textContent = text;
         el.className = 'status ' + (type || 'idle');
