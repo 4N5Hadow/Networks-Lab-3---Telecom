@@ -10,20 +10,35 @@
   <link rel="stylesheet" href="style.css">
 
   <script>
-    window._cvReady = false;
-    function _onOpenCvLoad() {
-      if (typeof cv !== 'undefined' && cv.Mat !== undefined) {
-        window._cvReady = true;
-        document.dispatchEvent(new Event('opencv-ready'));
-      } else if (typeof cv !== 'undefined') {
-        cv['onRuntimeInitialized'] = function () {
-          window._cvReady = true;
-          document.dispatchEvent(new Event('opencv-ready'));
-        };
-      }
+window._cvReady = false;
+
+function _markCvReady() {
+  if (window._cvReady) return;
+  window._cvReady = true;
+  document.dispatchEvent(new Event('opencv-ready'));
+}
+
+function _onOpenCvLoad() {
+  const started = Date.now();
+  const t = setInterval(() => {
+    if (typeof cv !== 'undefined' && cv.Mat) {
+      clearInterval(t);
+      _markCvReady();
+    } else if (Date.now() - started > 60000) {
+      clearInterval(t);
+      document.getElementById('cv-state').textContent = 'failed (timeout)';
+      document.getElementById('cv-dot').className = 'sys-dot fail';
     }
-  </script>
-  <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="_onOpenCvLoad()"></script>
+  }, 200);
+}
+
+function _onOpenCvError() {
+  document.getElementById('cv-state').textContent = 'failed to load';
+  document.getElementById('cv-dot').className = 'sys-dot fail';
+}
+</script>
+<script async src="https://docs.opencv.org/4.9.0/opencv.js"
+        onload="_onOpenCvLoad()" onerror="_onOpenCvError()"></script>
 </head>
 <body>
 
